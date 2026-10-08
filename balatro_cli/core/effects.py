@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Optional
+from typing import List
 
 from .scoring import Effect, Ctx
 from .items import JokerItem, ConsumableItem, Tag
@@ -7,9 +7,7 @@ from .card import Card, rank_id, RANKS, SUITS, SUIT_CN
 from .hand_eval import HAND_ORDER, HAND_CN, evaluate_poker_hand
 from ..data import centers as centers_data
 from ..data import consumables as consumable_data
-from ..data import boosters as booster_data
 from ..data import tags as tag_data
-from ..data.vouchers import VOUCHERS as VOUCHER_DATA
 
 
 def joker_cn(key: str) -> str:
@@ -28,30 +26,39 @@ def roll_prob(game, denom: int, label: str = "") -> bool:
 
 # ==========================================================================
 # 手牌"包含"关系（配对系小丑：j_jolly 等）
+#
+# 键 = 被包含的牌型，值 = 打出后会同时满足该牌型的牌型。
+# 依据 Lua evaluate_poker_hand 返回的 results 表：某牌型 K 非空即表示该手牌
+# "包含" K。除各分支的直接判定外，源码末尾还有三条派生：
+#   五条 → 四条 → 三条 → 对子（取前 4/3/2 张），
+# 因此例如葫芦含有对子/两对/三条、同花五条含有四条/三条/对子；
+# 而四条不含两对（get_X_same(2) 恰好取 2 张，四条手牌里没有这样的组）。
 # ==========================================================================
 _CONTAINS = {
-    "High Card": {"Pair", "Two Pair", "Three of a Kind", "Four of a Kind",
-                  "Full House", "Straight", "Flush", "Five of a Kind",
-                  "Straight Flush", "Flush House", "Flush Five"},
-    "Pair": {"Two Pair", "Three of a Kind", "Four of a Kind", "Full House",
-             "Five of a Kind", "Flush House", "Flush Five"},
-    "Two Pair": {"Full House", "Four of a Kind", "Flush House", "Flush Five", "Five of a Kind"},
-    "Three of a Kind": {"Four of a Kind", "Full House", "Five of a Kind", "Flush House", "Flush Five"},
+    "High Card": {"Flush Five", "Flush House", "Five of a Kind", "Straight Flush",
+                  "Four of a Kind", "Full House", "Flush", "Straight",
+                  "Three of a Kind", "Two Pair", "Pair"},
+    "Pair": {"Flush Five", "Flush House", "Five of a Kind", "Four of a Kind",
+             "Full House", "Three of a Kind", "Two Pair"},
+    "Two Pair": {"Flush House", "Full House"},
+    "Three of a Kind": {"Flush Five", "Flush House", "Five of a Kind",
+                        "Four of a Kind", "Full House"},
     "Straight": {"Straight Flush"},
-    "Flush": {"Straight Flush", "Flush House", "Flush Five"},
+    "Flush": {"Flush Five", "Flush House", "Straight Flush"},
     "Full House": {"Flush House"},
-    "Four of a Kind": {"Five of a Kind", "Flush House", "Flush Five"},
+    "Four of a Kind": {"Flush Five", "Five of a Kind"},
     "Straight Flush": set(),
-    "Five of a Kind": set(),
+    "Five of a Kind": {"Flush Five"},
     "Flush House": set(),
     "Flush Five": set(),
 }
 
 
 def contains_hand(actual: str, target: str) -> bool:
+    """打出的 actual 牌型是否包含 target 牌型（如葫芦包含对子）。"""
     if actual == target:
         return True
-    return target in _CONTAINS.get(actual, set())
+    return actual in _CONTAINS.get(target, set())
 
 
 def is_face_card(card: Card, game) -> bool:
