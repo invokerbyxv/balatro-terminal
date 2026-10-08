@@ -73,6 +73,25 @@ uv run textual run --dev main.py --tui
 - `o 1 2` —— 手动调整手牌顺序
 - `q` —— 退出当前对局
 
+#### 鼠标操作
+
+在 Windows Terminal、VS Code 集成终端等支持 xterm 鼠标协议的终端里，出牌界面与
+「选择目标牌」界面可以直接用鼠标操作：
+
+- **点击手牌**即选中/取消选中（等价于输入序号）
+- 点击底部的按钮行即可**打出 / 弃牌 / 消耗 / 售卖 / 排序 / 手动 / 退出**
+  （选择目标牌界面为**确认 / 取消**）
+
+说明：
+
+- 鼠标是增量能力，**键盘输入全程可用**，两者可以混用。
+- 启动时会向终端查询光标位置来探测能力，终端不支持（例如 PyCharm 运行窗口未勾选
+  「Emulate terminal in output console」）时自动回退为纯键盘操作。
+- 鼠标上报只在等待输入的那一小段时间开启，退出时（含 Ctrl+C 与异常）会还原。
+- 开启期间终端自身的拖拽选中文本会被拦截，按住 `Shift` 拖拽仍可选中复制。
+- 需要关闭鼠标支持时：`uv run main.py --cli --no-mouse`，或设环境变量
+  `BALATRO_CLI_MOUSE=0`；`--mouse` / `BALATRO_CLI_MOUSE=1` 可强制开启。
+
 ### TUI
 
 - **首页** —— `←` `→` 切换按钮，`Enter` 确认，`c` 打开收藏，`q` 退出
@@ -85,7 +104,7 @@ uv run textual run --dev main.py --tui
 ```
 main.py                     # 统一入口，按 --cli / --tui 分发
 balatro_cli/
-  cli/                      # CLI 界面：__main__ / screens / ui
+  cli/                      # CLI 界面：__main__ / screens / ui / terminal（终端与鼠标）
   core/                     # 牌、牌堆、手牌判定、计分、道具、效果
   data/                     # 盲注、卡包、卡牌中心、消耗品、牌组、标签、优惠券
 balatro_tui/

@@ -2,8 +2,12 @@ from __future__ import annotations
 import sys
 import os
 import re
+import shutil
 import unicodedata
-from typing import List
+from dataclasses import dataclass
+from typing import Callable, List, Optional, Sequence, Tuple
+
+from . import terminal
 
 # ---------- ANSI 颜色 ----------
 RESET = "\033[0m"
@@ -155,9 +159,193 @@ def consumable_line(idx: int, game, item) -> str:
     return f"{idx}.{color}{name}（{kind}）{RESET} {c('$'+str(item.sell_value()), YELLOW)}{extra}  {c(eff, GRAY)}"
 
 
-def prompt(default: str = "") -> str:
+# ---------- 鼠标点击区域 ----------
+
+HAND_PREFIX = "手牌: "
+
+#: 点击手牌后 prompt() 的返回值：调用方只需重绘，不做别的处理
+REDRAW = "\x00redraw"
+
+
+@dataclass
+class Region:
+    """一块可点击的屏幕区域，行列均从 1 开始，列区间为左闭右开。"""
+
+    row: int
+    col_start: int
+    col_end: int
+    kind: str               # "card" | "cmd"
+    value: object = None    # card → 手牌下标；cmd → 命令字符串
+
+
+def hit_test(regions: Sequence[Region], row: int, col: int) -> Optional[Region]:
+    for r in regions:
+        if r.row == row and r.col_start <= col < r.col_end:
+            return r
+    return None
+
+
+def _term_cols() -> int:
+    try:
+        return shutil.get_terminal_size().columns
+    except Exception:
+        return 80
+
+
+def hand_line_text(cards) -> str:
+    parts = [f"{i + 1}{render_card(c, getattr(c, 'selected', False))}"
+             for i, c in enumerate(cards)]
+    return HAND_PREFIX + "  ".join(parts)
+
+
+def amb_count(text: str) -> int:
+    """统计东亚宽度歧义字符（♠ ♥ ♣ ─ 等）的个数。
+
+    ``disp_len`` 按 2 列计算它们，但终端未必如此，需要靠实测宽度校正。
+    """
+    return sum(1 for ch in _ANSI_RE.sub("", text)
+               if unicodedata.east_asian_width(ch) == "A")
+
+
+def hand_regions(row: int, cards, measured: Optional[int] = None) -> List[Region]:
+    """算出每张牌在屏幕上的列区间；行宽超出终端时返回空表（不登记点击）。
+
+    ``measured`` 为终端实测的整行占用列数（见 :func:`print_tracked`），
+    用于校正歧义字符的宽度差异。
+    """
+    texts = [f"{i + 1}{render_card(c, getattr(c, 'selected', False))}"
+             for i, c in enumerate(cards)]
+    if not texts:
+        return []
+    widths = [disp_len(t) for t in texts]
+    prefix = disp_len(HAND_PREFIX)
+    total = prefix + sum(widths) + 2 * (len(widths) - 1)
+    if measured and measured > 1 and measured != total:
+        amb = sum(amb_count(t) for t in texts)
+        if amb and abs(measured - (total - amb)) < abs(measured - total):
+            widths = [w - amb_count(t) for w, t in zip(widths, texts)]
+            total = prefix + sum(widths) + 2 * (len(widths) - 1)
+    if total > _term_cols():
+        return []
+    regions: List[Region] = []
+    col = prefix + 1
+    for i, w in enumerate(widths):
+        left = col - 1 if i > 0 else col              # 与左邻平分 2 空格间隔
+        right = col + w + 1 if i < len(widths) - 1 else col + w
+        regions.append(Region(row, left, right, "card", i))
+        col += w + 2
+    return regions
+
+
+def button_row(buttons: Sequence[Tuple[str, str]]) -> Tuple[str, List[Tuple[int, int, str]]]:
+    """渲染一行按钮，返回 (文本, [(列偏移, 宽度, 命令), ...])。"""
+    parts: List[str] = []
+    spans: List[Tuple[int, int, str]] = []
+    offset = 0
+    for label, cmd in buttons:
+        text = f"[ {label} {cmd} ]"
+        if parts:
+            parts.append(" ")
+            offset += 1
+        spans.append((offset, disp_len(text), cmd))
+        parts.append(text)
+        offset += disp_len(text)
+    return "".join(parts), spans
+
+
+def button_regions(row: int, indent: int, buttons: Sequence[Tuple[str, str]]) -> List[Region]:
+    """按钮行的点击区域；``indent`` 为文本前的空白列数。行宽超出终端时返回空表。"""
+    text, spans = button_row(buttons)
+    if indent + disp_len(text) > _term_cols():
+        return []
+    return [Region(row, indent + off + 1, indent + off + w + 1, "cmd", cmd)
+            for off, w, cmd in spans]
+
+
+def print_tracked(text: str, measure: bool = False) -> Tuple[Optional[int], Optional[int]]:
+    """打印一行，并返回它落在屏幕第几行（``measure`` 为真时同时返回实测宽度）。
+
+    行号通过向终端查询光标位置得到，不受换行与滚动影响；终端不应答时返回
+    ``(None, None)``，调用方据此不登记点击区域。
+    """
+    if not terminal.mouse_available():
+        print(text)
+        return None, None
+    start = terminal.cursor_pos()
+    if start is None:
+        print(text)
+        return None, None
+    row, col = start
+    if not measure:
+        print(text)
+        return row, None
+    print(text, end="", flush=True)
+    end = terminal.cursor_pos()
+    print()
+    # 行尾恰好折行时 end 会落到下一行，此时宽度不可靠，交由 hand_regions 兜底
+    width = end[1] - col if (end is not None and end[0] == row) else None
+    return row, width
+
+
+def prompt(default: str = "", regions: Optional[Sequence[Region]] = None,
+           on_click: Optional[Callable[[object], None]] = None) -> str:
+    """读取一行输入。
+
+    ``regions`` 非空且终端支持鼠标时，点击会立即生效：
+    ``kind == "card"`` 的区域调用 ``on_click(value)`` 并返回 :data:`REDRAW`；
+    ``kind == "cmd"`` 的区域直接返回其命令字符串。
+    """
+    if regions and terminal.mouse_available():
+        with terminal.raw_session() as ok:
+            if ok:
+                return _mouse_prompt(default, regions, on_click)
+    return _plain_prompt(default)
+
+
+def _plain_prompt(default: str = "") -> str:
     try:
         line = input(c("> ", CYAN) + default).strip()
     except (EOFError, KeyboardInterrupt):
         return "quit"
     return line
+
+
+def _mouse_prompt(default: str, regions: Sequence[Region],
+                  on_click: Optional[Callable[[object], None]]) -> str:
+    """在原始模式下读一行；调用前必须已经进入 raw_session。"""
+    buf = default
+    print(c("> ", CYAN) + default, end="", flush=True)
+    while True:
+        ev = terminal.read_event()
+        if ev is None:
+            continue
+        if isinstance(ev, terminal.MouseEvent):
+            if ev.motion or not ev.pressed:
+                continue
+            if ev.button in (terminal.BTN_WHEEL_UP, terminal.BTN_WHEEL_DOWN):
+                continue
+            hit = hit_test(regions, ev.y, ev.x)
+            if hit is None:
+                continue
+            print()
+            if hit.kind == "cmd":
+                return str(hit.value)
+            if on_click is not None:
+                on_click(hit.value)
+            return REDRAW
+        if ev.name == "enter":
+            print()
+            return buf.strip()
+        if ev.name == "backspace":
+            if buf:
+                buf = buf[:-1]
+                print("\b \b", end="", flush=True)
+            continue
+        if ev.name in ("ctrl-c", "ctrl-d"):
+            print()
+            return "quit"
+        if ev.name:
+            continue
+        if ev.char and ev.char.isprintable():
+            buf += ev.char
+            print(ev.char, end="", flush=True)

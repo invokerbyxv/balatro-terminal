@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 
 from . import ui
+from . import terminal
 from ..core.game import Game
 from ..core.card import Card
 from ..core.items import JokerItem
@@ -27,8 +28,15 @@ class App:
         self.target_min: int = 1
         self.return_state: str = "play"
         self.target_return: str = "play"
+        self.regions: List[ui.Region] = []
 
     def run(self):
+        try:
+            self._run_loop()
+        finally:
+            terminal.restore()
+
+    def _run_loop(self):
         while True:
             ui.clear_screen()
             try:
@@ -79,12 +87,18 @@ class App:
             head += f"   {ui.c(sub, ui.GRAY)}"
         print(f"{ui.c('━', ui.DIM)} {head} {ui.c('━', ui.DIM)}")
 
-    def _hand_line(self):
+    def _hand_line(self, clickable: bool = False):
         g = self.game
-        parts = []
-        for i, card in enumerate(g.hand):
-            parts.append(f"{i + 1}{ui.render_card(card, getattr(card, 'selected', False))}")
-        print("手牌: " + "  ".join(parts))
+        row, measured = ui.print_tracked(ui.hand_line_text(g.hand), measure=clickable)
+        if row is not None:
+            self.regions.extend(ui.hand_regions(row, g.hand, measured))
+
+    def _button_line(self, buttons):
+        """打印一行可点击按钮（同时充当快捷键说明）。"""
+        text, _ = ui.button_row(buttons)
+        row, _ = ui.print_tracked("  " + text)
+        if row is not None:
+            self.regions.extend(ui.button_regions(row, 2, buttons))
 
     def _jokers(self, sell_mode: bool = False):
         g = self.game
@@ -256,18 +270,21 @@ class App:
 
     def _play(self):
         g = self.game
+        self.regions = []
         self._blind_meta()
         self._stats()
         self._tags()
-        self._hand_line()
+        self._hand_line(clickable=True)
         self._jokers()
         self._consumables()
         self._show_log()
-        print(f"  选牌：输入序号可多选（如 {ui.c('1 2 3', ui.CYAN)} 或 {ui.c('1-3', ui.CYAN)}），重复输入可取消")
-        print(f"  {ui.c('p', ui.GREEN)}打出 {ui.c('d', ui.GREEN)}弃牌 {ui.c('u', ui.BLUE)}用消耗 "
-              f"{ui.c('s', ui.YELLOW)}售卖 {ui.c('o', ui.CYAN)}排序(花色⇄点数) {ui.c('ou', ui.CYAN)}手动 "
-              f"{ui.c('o 1 2', ui.CYAN)}换位 {ui.c('q', ui.RED)}退出")
-        cmd = ui.prompt()
+        print(f"  选牌：点击卡片或输入序号（如 {ui.c('1 2 3', ui.CYAN)} / {ui.c('1-3', ui.CYAN)}），"
+              f"重复输入取消；{ui.c('o 1 2', ui.CYAN)} 换位")
+        self._button_line([("打出", "p"), ("弃牌", "d"), ("消耗", "u"), ("售卖", "s"),
+                           ("排序", "o"), ("手动", "ou"), ("退出", "q")])
+        cmd = ui.prompt(regions=self.regions, on_click=g.toggle_select)
+        if cmd == ui.REDRAW:
+            return
         if cmd in ("p", ""):
             if not g.selected_cards():
                 print("  请先用数字选择要打出的牌")
@@ -635,12 +652,15 @@ class App:
             self.state = self.target_return
             return
         info = consumable_data.ALL_CONSUMABLES.get(g.pending_consumable.key, {})
+        self.regions = []
         self._banner(f"选择目标牌 · {info.get('cn', '')}",
                      f"需选择 {self.target_min}-{self.target_needed} 张")
-        self._hand_line()
-        print(f"  输入序号可多选（如 {ui.c('1 2 3', ui.CYAN)} 或 {ui.c('1-3', ui.CYAN)}），重复输入可取消")
-        print(f"  {ui.c('0', ui.GREEN)} 确认  {ui.c('q', ui.RED)} 取消")
-        cmd = ui.prompt()
+        self._hand_line(clickable=True)
+        print(f"  点击卡片或输入序号（如 {ui.c('1 2 3', ui.CYAN)} 或 {ui.c('1-3', ui.CYAN)}），重复输入可取消")
+        self._button_line([("确认", "0"), ("取消", "q")])
+        cmd = ui.prompt(regions=self.regions, on_click=g.toggle_select)
+        if cmd == ui.REDRAW:
+            return
         if cmd == "0":
             selected = [i for i, c in enumerate(g.hand) if getattr(c, "selected", False)]
             if len(selected) < self.target_min:

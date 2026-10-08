@@ -1,6 +1,7 @@
 import sys
 
 from .ui import setup_console
+from . import terminal
 from .screens import App
 
 
@@ -12,6 +13,10 @@ def main(argv: list[str] | None = None) -> None:
     """
     setup_console()
     args = list(sys.argv[1:] if argv is None else argv)
+    if "--no-mouse" in args:
+        terminal.force(False)
+    elif "--mouse" in args:
+        terminal.force(True)
     seed = None
     if "-s" in args:
         i = args.index("-s")
