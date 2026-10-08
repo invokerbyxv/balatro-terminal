@@ -254,12 +254,41 @@ class Game:
         """当前底注的盲注顺序（小/大/头目）。"""
         return ["bl_small", "bl_big", self.boss_key or "bl_big"]
 
+    def current_blind_key(self) -> str:
+        """当前盲注键；``blind_key`` 未定（选盲注阶段）时按 ``blind_on_deck`` 推导。"""
+        if self.blind_key:
+            return self.blind_key
+        return {"Small": "bl_small", "Big": "bl_big",
+                "Boss": self.boss_key or "bl_big"}[self.blind_on_deck]
+
     def current_blind_chips(self) -> int:
-        """当前（或待选）盲注的得分门槛。blind_key 未定（选盲注界面）时按 blind_on_deck 推导。"""
-        key = self.blind_key
-        if key is None:
-            key = {"Small": "bl_small", "Big": "bl_big", "Boss": self.boss_key or "bl_big"}[self.blind_on_deck]
-        return blind_data.blind_chips(key, self.ante, self.ante_scaling)
+        """当前（或待选）盲注的得分门槛。"""
+        return blind_data.blind_chips(self.current_blind_key(), self.ante, self.ante_scaling)
+
+    def round_counts(self, blind_key: Optional[str] = None) -> tuple[int, int]:
+        """本回合的出牌 / 弃牌次数（含牌组与优惠券加成、头目限制）。
+
+        ``blind_key`` 缺省时按 :meth:`current_blind_key` 推导，因此在 select_blind
+        执行之前也能算出即将开始的回合的真实次数（那时字段里还是上一轮的旧值）。
+        """
+        key = blind_key or self.current_blind_key()
+        cfg = deck_data.DECKS[self.deck_key]["config"] if self.deck_key else {}
+        hands = max(1, START_PARAMS["hands"] + cfg.get("hands", 0)) + self._voucher_bonus("hands")
+        discards = max(0, START_PARAMS["discards"] + cfg.get("discards", 0)) + self._voucher_bonus("discards")
+        if key == "bl_needle":
+            hands = 1
+        if key == "bl_water":
+            discards = 0
+        return hands, discards
+
+    def round_hand_size(self, blind_key: Optional[str] = None) -> int:
+        """本回合的手牌上限（含牌组与优惠券加成、头目限制）。"""
+        key = blind_key or self.current_blind_key()
+        cfg = deck_data.DECKS[self.deck_key]["config"] if self.deck_key else {}
+        n = START_PARAMS["hand_size"] + cfg.get("hand_size", 0) + self._voucher_bonus("hand_size")
+        if key == "bl_manacle":
+            n = max(1, n - 1)
+        return n
 
     def blind_cn(self, key: str) -> str:
         return blind_data.get_blind_cfg(key)["cn"]
@@ -305,19 +334,8 @@ class Game:
         self.chips = 0
         # 注意：played_this_ante 在整个底注内累积（柱头 boss），在 reset_blinds（新底注）时清空
         self.round_hand_played = []
-        self.hands_left = max(1, START_PARAMS["hands"] + deck_data.DECKS[self.deck_key]["config"].get("hands", 0))
-        self.discards_left = max(0, START_PARAMS["discards"] + deck_data.DECKS[self.deck_key]["config"].get("discards", 0))
-        # 优惠券永久加成
-        self.hands_left += self._voucher_bonus("hands")
-        self.discards_left += self._voucher_bonus("discards")
-        if self.blind_on_deck == "Boss" and self.blind_key in ("bl_needle",):
-            self.hands_left = 1
-        if self.blind_key == "bl_water":
-            self.discards_left = 0
-        self.hand_size = START_PARAMS["hand_size"] + deck_data.DECKS[self.deck_key]["config"].get("hand_size", 0)
-        self.hand_size += self._voucher_bonus("hand_size")
-        if self.blind_key == "bl_manacle":
-            self.hand_size = max(1, self.hand_size - 1)
+        self.hands_left, self.discards_left = self.round_counts(key)
+        self.hand_size = self.round_hand_size(key)
         self.reroll_cost_increase = 0
         self.hands_played_round = 0
         self.last_hand_name = None

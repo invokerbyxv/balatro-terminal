@@ -980,11 +980,34 @@ def _add_planet(game, key: str) -> None:
     game.hand_levels[info["hand"]] += 1
     game.planets_used.add(key)
     game.constellation_count += 1
-    game.last_tarot_planet = key
     game.say(f"星球牌：{info['cn']} —— {HAND_CN.get(info['hand'], info['hand'])} 等级升至 {game.hand_levels[info['hand']]}")
 
 
+def mark_consumable_used(game, key: str) -> None:
+    """记录一张刚生效的消耗牌（Lua 在 card:use_consumeable 里统一维护）。
+
+    塔罗 / 星球牌写入 ``last_tarot_planet``——愚者据此复制上一次使用的牌；
+    塔罗牌同时累计 ``tarots_used``——幸运预言师据此加倍数。
+    """
+    if key in consumable_data.TAROTS or key in consumable_data.PLANETS:
+        game.last_tarot_planet = key
+        if key in consumable_data.TAROTS:
+            game.tarots_used += 1
+
+
 def use_consumable(game, item: ConsumableItem) -> str:
+    """使用一张消耗牌；返回 "done" / "needs_target" / "invalid"。
+
+    需要选目标的塔罗牌此时只登记 ``pending_consumable``，等玩家选完目标后
+    由 :func:`finish_consumable_target` 生效并补记使用状态。
+    """
+    status = _apply_consumable(game, item)
+    if status == "done":
+        mark_consumable_used(game, item.key)
+    return status
+
+
+def _apply_consumable(game, item: ConsumableItem) -> str:
     key = item.key
     if key in consumable_data.PLANETS:
         _add_planet(game, key)
@@ -1277,9 +1300,7 @@ def finish_consumable_target(game, target_cards: List[Card]) -> str:
     else:
         msgs.append(f"未知消耗牌 {key}")
 
-    if key in consumable_data.TAROTS:
-        game.tarots_used += 1
-        game.last_tarot_planet = key
+    mark_consumable_used(game, key)
     game.consumeables.remove(item)
     game.pending_consumable = None
     for m in msgs:

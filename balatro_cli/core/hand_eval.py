@@ -4,6 +4,7 @@
 get_flush / get_straight / get_highest，以及 game.lua 的手牌基础数值表。
 """
 from __future__ import annotations
+from itertools import combinations
 from typing import List, Optional, Tuple
 
 from .card import Card, rank_id
@@ -177,6 +178,30 @@ def evaluate_poker_hand(hand: List[Card], four_fingers: bool = False,
     if _2:
         return "Pair", _2[0]
     return "High Card", _highest
+
+
+def best_hand(cards: List[Card], four_fingers: bool = False,
+              shortcut: bool = False, smeared: bool = False) -> Tuple[str, List[Card]]:
+    """从 ``cards`` 中挑出能打出的最佳牌型，返回 (手牌名称, 记分牌)。
+
+    只用于预览（信息界面「当前手牌能打出什么」）：出牌上限 5 张，因此多于
+    5 张时枚举所有 5 张组合，按 :data:`HAND_ORDER` 优先级取最高的一个。
+    实际出牌时仍只判定玩家打出的牌（见 :func:`evaluate_poker_hand`）。
+    """
+    if not cards:
+        return "", []
+    if len(cards) <= 5:
+        return evaluate_poker_hand(cards, four_fingers, shortcut, smeared)
+    best = ("High Card", [])
+    best_rank = len(HAND_ORDER)
+    for combo in combinations(cards, 5):
+        name, scoring = evaluate_poker_hand(list(combo), four_fingers, shortcut, smeared)
+        rank = HAND_ORDER.index(name)
+        if rank < best_rank:
+            best_rank, best = rank, (name, scoring)
+            if rank == 0:            # 已经是最高牌型，无需继续
+                break
+    return best
 
 
 def is_royal_flush(name: str, scoring_hand: List[Card]) -> bool:

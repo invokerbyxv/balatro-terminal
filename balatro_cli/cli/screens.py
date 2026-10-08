@@ -7,6 +7,7 @@ from ..core.game import Game
 from ..core.card import Card
 from ..core.items import JokerItem
 from ..core.scoring import blocked_play_reason
+from ..core.hand_eval import HAND_CN, HAND_ORDER, best_hand, hand_level_stats
 from ..data import decks as deck_data
 from ..data import blinds as blind_data
 from ..data import centers as centers_data
@@ -29,6 +30,7 @@ class App:
         self.target_min: int = 1
         self.return_state: str = "play"
         self.target_return: str = "play"
+        self.info_return: str = "play"
         self.regions: List[ui.Region] = []
 
     def run(self):
@@ -71,6 +73,8 @@ class App:
                     self._collection()
                 elif self.state == "items":
                     self._items()
+                elif self.state == "info":
+                    self._info()
             except (EOFError, KeyboardInterrupt):
                 return
 
@@ -159,6 +163,94 @@ class App:
         cmd = ui.prompt()
         if cmd in ("", "0", "q", "quit"):
             self.state = self.return_state
+
+    # ------------------------------------------------------------------
+    # 信息界面（i）
+    # ------------------------------------------------------------------
+    def _info(self):
+        """信息界面：牌型等级 / 出牌次数 / 筹码倍率 / 已拥有的优惠券。"""
+        g = self.game
+        key = g.current_blind_key()
+        name = g.blind_cn(key)
+        if key == g.boss_key:
+            name = f"★{name}★"
+        self._banner("局面信息", f"第 {g.ante} 底注 · {name}")
+        target = g.current_blind_chips()
+        if g.blind_key is None:
+            # 选盲注 / 商店阶段：chips 还是上一回合的旧值
+            score = ui.c("尚未开始", ui.GRAY)
+        else:
+            pct = g.chips / target * 100 if target else 0
+            score = f"{ui.c(str(g.chips), ui.GREEN)} ({pct:.0f}%)"
+        hands, discards = g.round_counts()
+        print(f"  目标 {ui.c(str(target), ui.YELLOW)}   得分 {score}   "
+              f"金钱 {ui.c('$' + str(g.dollars), ui.YELLOW)}   牌组 {g.deck.count()}")
+        print(f"  本回合 出牌 {ui.c(str(hands), ui.GREEN)} 次   弃牌 {ui.c(str(discards), ui.GREEN)} 次   "
+              f"手牌上限 {g.round_hand_size()}   本局已打出 {g.hands_played_total} 手")
+        self._hand_preview()
+        print()
+        self._hand_levels(self._preview_hand_name())
+        print()
+        self._owned_vouchers()
+        self._show_log()
+        print(f"  {ui.c('0', ui.CYAN)} 返回")
+        cmd = ui.prompt()
+        if cmd in ("", "0", "q", "quit"):
+            self.state = self.info_return
+
+    def _preview_hand_name(self) -> Optional[str]:
+        """当前选择（没选牌时为整手牌）能打出的最佳牌型名；无牌时返回 None。"""
+        g = self.game
+        cards = g.selected_cards() or g.hand
+        if not cards:
+            return None
+        name, _ = best_hand(cards,
+                            four_fingers=g.any_joker("j_four_fingers"),
+                            shortcut=g.any_joker("j_shortcut"),
+                            smeared=g.any_joker("j_smeared"))
+        return name or None
+
+    def _hand_preview(self):
+        """当前手牌能打出的牌型及其等级数值。"""
+        g = self.game
+        name = self._preview_hand_name()
+        if name is None:
+            return
+        lv = g.hand_levels[name]
+        mult, chips = hand_level_stats(name, lv)
+        label = "当前选择" if g.selected_cards() else "当前手牌可组成"
+        print(f"  {ui.c(label, ui.GRAY)} {ui.c(HAND_CN.get(name, name), ui.YELLOW)} · "
+              f"Lv.{lv}（{ui.c(str(chips), ui.GREEN)} 筹码 × {ui.c(str(mult), ui.RED)} 倍率）")
+
+    def _hand_levels(self, current: Optional[str]):
+        """牌型等级表：★ 标出当前手牌能打出的牌型，等级 >1 的用绿色标出。"""
+        g = self.game
+        print("牌型等级:")
+        cells = []
+        for name in HAND_ORDER:
+            lv = g.hand_levels[name]
+            mult, chips = hand_level_stats(name, lv)
+            text = f"{HAND_CN.get(name, name)} Lv.{lv} {chips}×{mult}"
+            if name == current:
+                text = ui.c("★" + text, ui.YELLOW)
+            elif lv > 1:
+                text = ui.c(text, ui.GREEN)
+            else:
+                text = ui.c(text, ui.GRAY)
+            cells.append(text)
+        for line in ui.grid_lines(cells, 3):
+            print(f"  {line}")
+
+    def _owned_vouchers(self):
+        """已拥有的优惠券（按数据表顺序，即一级券在前、二级券在后）。"""
+        g = self.game
+        owned = [d for k, d in voucher_data.VOUCHERS.items() if k in g.used_vouchers]
+        if not owned:
+            print(f"优惠券: {ui.c('（暂无）', ui.GRAY)}")
+            return
+        print("优惠券:")
+        for d in owned:
+            print(f"  {ui.BOLD}{d['cn']}{ui.RESET}  {ui.c(d['effect'], ui.GRAY)}")
 
     def _tags(self):
         g = self.game
@@ -271,7 +363,8 @@ class App:
                 print(f"  {ui.c('1', ui.CYAN)} 迎战 {label}  （目标 {ui.c(str(g.current_blind_chips()), ui.YELLOW)}{mult}）")
             print(f"  {ui.c('2', ui.CYAN)} {skip_line}")
         self._items_line()
-        print(f"  {ui.c('u', ui.BLUE)} 用消耗   {ui.c('c', ui.CYAN)} 收藏   {ui.c('q', ui.CYAN)} 返回菜单")
+        print(f"  {ui.c('u', ui.BLUE)} 用消耗   {ui.c('c', ui.CYAN)} 收藏   "
+              f"{ui.c('i', ui.CYAN)} 信息   {ui.c('q', ui.CYAN)} 返回菜单")
         cmd = ui.prompt()
         if cmd == "1":
             g.select_blind()
@@ -296,6 +389,9 @@ class App:
         elif cmd == "3" or cmd == "j":
             self.return_state = "blind"
             self.state = "items"
+        elif cmd == "i":
+            self.info_return = "blind"
+            self.state = "info"
         elif cmd == "u":
             self.return_state = "blind"
             self.state = "consume"
@@ -318,7 +414,7 @@ class App:
         print(f"  选牌：点击卡片或输入序号（如 {ui.c('1 2 3', ui.CYAN)} / {ui.c('1-3', ui.CYAN)}），"
               f"重复输入取消；{ui.c('o 1 2', ui.CYAN)} 换位")
         self._button_line([("打出", "p"), ("弃牌", "d"), ("消耗", "u"), ("售卖", "s"),
-                           ("排序", "o"), ("手动", "ou"), ("退出", "q")])
+                           ("信息", "i"), ("排序", "o"), ("手动", "ou"), ("退出", "q")])
         cmd = ui.prompt(regions=self.regions, on_click=g.toggle_select)
         if cmd == ui.REDRAW:
             return
@@ -343,6 +439,9 @@ class App:
         elif cmd == "j":
             self.return_state = "play"
             self.state = "items"
+        elif cmd == "i":
+            self.info_return = "play"
+            self.state = "info"
         elif cmd == "u":
             self.return_state = "play"
             self.state = "consume"
@@ -568,7 +667,8 @@ class App:
         self._items_line()
         self._show_log()
         print(f"  {ui.c('r', ui.GREEN)}重掷(${g.calculate_reroll_cost()})  {ui.c('s', ui.YELLOW)}售卖  "
-              f"{ui.c('u', ui.BLUE)}用消耗  {ui.c('x', ui.RED)}离开商店  {ui.c('q', ui.RED)}退出游戏")
+              f"{ui.c('u', ui.BLUE)}用消耗  {ui.c('i', ui.CYAN)}信息  {ui.c('x', ui.RED)}离开商店  "
+              f"{ui.c('q', ui.RED)}退出游戏")
         cmd = ui.prompt()
         if cmd.startswith("b"):
             try:
@@ -586,6 +686,9 @@ class App:
         elif cmd == "j":
             self.return_state = "shop"
             self.state = "items"
+        elif cmd == "i":
+            self.info_return = "shop"
+            self.state = "info"
         elif cmd == "s":
             self.return_state = "shop"
             self.state = "sell"
