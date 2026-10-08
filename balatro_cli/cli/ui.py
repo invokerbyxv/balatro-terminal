@@ -10,19 +10,63 @@ from typing import Callable, List, Optional, Sequence, Tuple
 from . import terminal
 
 # ---------- ANSI 颜色 ----------
+# 颜色默认关闭（终端默认前景色更素净），用 --color 或 BALATRO_CLI_COLOR=1 开启。
 RESET = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
-RED = "\033[91m"
-GREEN = "\033[92m"
-YELLOW = "\033[93m"
-BLUE = "\033[94m"
-MAGENTA = "\033[95m"
-CYAN = "\033[96m"
-GRAY = "\033[90m"
+
+#: 各颜色对应的 ANSI 码；:func:`set_color` 据此刷新下面的模块级常量
+_COLOR_CODES = {
+    "RED": "\033[91m",
+    "GREEN": "\033[92m",
+    "YELLOW": "\033[93m",
+    "BLUE": "\033[94m",
+    "MAGENTA": "\033[95m",
+    "CYAN": "\033[96m",
+    "GRAY": "\033[90m",
+}
+
+RED = ""
+GREEN = ""
+YELLOW = ""
+BLUE = ""
+MAGENTA = ""
+CYAN = ""
+GRAY = ""
+
+_color_on = False
+
+
+def set_color(enabled: bool) -> None:
+    """开启 / 关闭彩色输出（默认关闭）。
+
+    关闭时所有颜色常量都是空串，:func:`c` 原样返回文本，不会残留转义序列；
+    ``BOLD`` / ``DIM`` / ``RESET`` 属于字形样式，不受影响。
+    """
+    global RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, GRAY, _color_on
+    _color_on = bool(enabled)
+    for name, code in _COLOR_CODES.items():
+        globals()[name] = code if enabled else ""
+
+
+def color_enabled() -> bool:
+    """当前是否开启了彩色输出。"""
+    return _color_on
+
+
+def color_of(name: str) -> str:
+    """按名称取当前生效的颜色码（``"RED"`` 等）；关闭或名称未知时返回空串。
+
+    模块级常量在 :func:`set_color` 里被重绑，因此需要延迟取值的地方（例如
+    :data:`SUIT_COLOR` 这类映射表）应当走这个函数，否则会冻结导入时的旧值。
+    """
+    return _COLOR_CODES.get(name, "") if _color_on else ""
 
 
 def c(text, color):
+    """给 ``text`` 上色；``color`` 为空串（颜色已关闭）时原样返回。"""
+    if not color:
+        return f"{text}"
     return f"{color}{text}{RESET}"
 
 
@@ -114,7 +158,8 @@ def clear_screen():
     print("\033[2J\033[H", end="")
 
 
-SUIT_COLOR = {"S": CYAN, "H": RED, "C": GREEN, "D": YELLOW}
+#: 花色 → 颜色名（用 :func:`color_of` 取当前生效的颜色码）
+SUIT_COLOR = {"S": "CYAN", "H": "RED", "C": "GREEN", "D": "YELLOW"}
 
 
 def render_card(card, selected: bool = False, colorized: bool = True) -> str:
@@ -133,7 +178,7 @@ def render_card(card, selected: bool = False, colorized: bool = True) -> str:
         s += "·" + "·".join(tags)
     core = f"{s}"
     if colorized and not card.debuffed:
-        core = f"{SUIT_COLOR.get(card.suit, '')}{s}{RESET}"
+        core = c(s, color_of(SUIT_COLOR.get(card.suit, "")))
     if selected:
         core = f"[{BOLD}{core}{RESET}]"
     else:
@@ -181,7 +226,7 @@ def joker_line(idx: int, game, j) -> str:
     rarity = cd.RARITY_CN.get(cfg["rarity"], "")
     desc = cfg["e"]
     star = "★" if j.debuffed else " "
-    line = f"{idx}.{star}{rarity_color(cfg['rarity'])}{name}{RESET} {c('['+rarity+']', rarity_color(cfg['rarity']))} {c('$'+str(j.sell_value()), YELLOW)}{extra}"
+    line = f"{idx}.{star}{c(name, rarity_color(cfg['rarity']))} {c('['+rarity+']', rarity_color(cfg['rarity']))} {c('$'+str(j.sell_value()), YELLOW)}{extra}"
     return line + f"  {c(desc, GRAY)}"
 
 
@@ -199,7 +244,7 @@ def consumable_line(idx: int, game, item) -> str:
     extra = ""
     if item.edition:
         extra += f"·{EDITION_CN.get(item.edition, item.edition)}"
-    return f"{idx}.{color}{name}（{kind}）{RESET} {c('$'+str(item.sell_value()), YELLOW)}{extra}  {c(eff, GRAY)}"
+    return f"{idx}.{c(f'{name}（{kind}）', color)} {c('$'+str(item.sell_value()), YELLOW)}{extra}  {c(eff, GRAY)}"
 
 
 # ---------- 鼠标点击区域 ----------

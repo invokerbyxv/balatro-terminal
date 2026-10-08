@@ -48,6 +48,7 @@ TUI 开发模式:
 
 CLI 版本支持透传参数，例如指定随机种子:
   uv run main.py --cli -s 12345
+  uv run main.py --cli --color   # 彩色输出（默认关闭，也可用 BALATRO_CLI_COLOR=1）
 """
 
 

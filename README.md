@@ -31,6 +31,16 @@ uv run cli
 uv run main.py --cli -s 12345
 ```
 
+颜色默认关闭（用终端默认前景色，更素净），需要彩色输出时加 `--color`：
+
+```bash
+uv run main.py --cli --color
+# 或设环境变量
+BALATRO_CLI_COLOR=1 uv run main.py --cli
+```
+
+`--no-color` / `BALATRO_CLI_COLOR=0` 可显式关闭；命令行参数优先于环境变量。
+
 ### TUI 版本
 
 ```bash
