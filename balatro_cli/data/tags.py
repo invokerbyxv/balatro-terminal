@@ -1,0 +1,58 @@
+"""标签（Tag）数据。
+
+来源：game.lua G.P_TAGS（224-249）、tag.lua。min_ante=最早出现的底注。
+"""
+from __future__ import annotations
+
+TAGS = {
+    "tag_uncommon": {"cn": "罕见标签", "min_ante": 1,
+                     "effect": "商店免费出现 1 张罕见小丑牌"},
+    "tag_rare": {"cn": "稀有标签", "min_ante": 1,
+                 "effect": "商店免费出现 1 张稀有罕见小丑牌"},
+    "tag_negative": {"cn": "负片标签", "min_ante": 2,
+                     "effect": "商店 1 张随机小丑牌获得负片版本"},
+    "tag_foil": {"cn": "箔片标签", "min_ante": 1,
+                 "effect": "商店 1 张小丑牌获得箔片版本"},
+    "tag_holo": {"cn": "全息标签", "min_ante": 1,
+                 "effect": "商店 1 张小丑牌获得全息版本"},
+    "tag_polychrome": {"cn": "彩绘标签", "min_ante": 1,
+                       "effect": "商店 1 张小丑牌获得彩绘版本"},
+    "tag_investment": {"cn": "投资标签", "min_ante": 1,
+                       "effect": "击败头目盲注时 +$25"},
+    "tag_voucher": {"cn": "优惠券标签", "min_ante": 1,
+                    "effect": "商店出现 1 张免费优惠券"},
+    "tag_boss": {"cn": "头目标签", "min_ante": 1,
+                 "effect": "免费重掷头目盲注"},
+    "tag_standard": {"cn": "标准标签", "min_ante": 2,
+                     "effect": "免费开启 1 个巨型标准包"},
+    "tag_charm": {"cn": "护身符标签", "min_ante": 1,
+                  "effect": "免费开启 1 个巨型塔罗包"},
+    "tag_meteor": {"cn": "陨石标签", "min_ante": 2,
+                   "effect": "免费开启 1 个巨型星球包"},
+    "tag_buffoon": {"cn": "小丑标签", "min_ante": 2,
+                    "effect": "免费开启 1 个巨型小丑包"},
+    "tag_handy": {"cn": "便利标签", "min_ante": 2,
+                  "effect": "立即获得本回合出牌次数 ×$1"},
+    "tag_garbage": {"cn": "垃圾标签", "min_ante": 2,
+                    "effect": "立即获得本回合剩余弃牌次数 ×$1"},
+    "tag_ethereal": {"cn": "以太标签", "min_ante": 2,
+                     "effect": "免费开启 1 个幻灵包"},
+    "tag_coupon": {"cn": "优惠券标签", "min_ante": 1,
+                   "effect": "本回合商店所有商品免费"},
+    "tag_double": {"cn": "双重标签", "min_ante": 1,
+                   "effect": "复制你拥有的下一个标签"},
+    "tag_juggle": {"cn": "杂耍标签", "min_ante": 1,
+                   "effect": "本回合手牌上限 +3"},
+    "tag_d_six": {"cn": "D6 标签", "min_ante": 1,
+                  "effect": "本回合商店重掷费用为 $0"},
+    "tag_top_up": {"cn": "充值标签", "min_ante": 2,
+                   "effect": "获得 2 张随机小丑牌"},
+    "tag_skip": {"cn": "跳过标签", "min_ante": 1,
+                 "effect": "立即获得 $5 × 本局已跳过的盲注数"},
+    "tag_orbital": {"cn": "轨道标签", "min_ante": 2,
+                    "effect": "随机手牌类型等级 +3"},
+    "tag_economy": {"cn": "经济标签", "min_ante": 1,
+                    "effect": "立即获得当前金钱（最高 $40）"},
+}
+
+# 小盲/大盲各生成 1 个标签，跳过时获得

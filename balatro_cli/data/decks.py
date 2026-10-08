@@ -1,0 +1,57 @@
+"""牌组（Deck/Back）数据。
+
+来源：game.lua G.P_CENTERS 的 Back 部分（628-644）、back.lua apply_to_run（174-278）。
+"""
+from __future__ import annotations
+
+DECKS = {
+    "b_red": {"cn": "红牌组",
+              "effect": "每回合弃牌次数 +1",
+              "config": {"discards": 1}},
+    "b_blue": {"cn": "蓝牌组",
+               "effect": "每回合出牌次数 +1",
+               "config": {"hands": 1}},
+    "b_yellow": {"cn": "黄牌组",
+                 "effect": "开局 +$10",
+                 "config": {"dollars": 10}},
+    "b_green": {"cn": "绿牌组",
+                "effect": "每剩余一手牌 +$2、每剩余一次弃牌 +$1，无利息",
+                "config": {"money_per_hand": 2, "money_per_discard": 1, "no_interest": True}},
+    "b_black": {"cn": "黑牌组",
+                "effect": "每回合出牌次数 -1，小丑牌栏位 +1",
+                "config": {"hands": -1, "joker_slot": 1}},
+    "b_magic": {"cn": "魔术牌组",
+                "effect": "开局自带水晶球优惠券和 2 张愚者塔罗",
+                "config": {"voucher": "v_crystal_ball", "consumables": ["c_fool", "c_fool"]}},
+    "b_nebula": {"cn": "星云牌组",
+                 "effect": "开局自带望远镜优惠券，消耗品格 -1",
+                 "config": {"voucher": "v_telescope", "consumable_slot": -1}},
+    "b_ghost": {"cn": "鬼牌组",
+                "effect": "幻灵牌出现率提升，开局自带 1 张诅咒幻灵",
+                "config": {"spectral_rate": 2, "consumables": ["c_hex"]}},
+    "b_abandoned": {"cn": "弃牌牌组",
+                    "effect": "牌堆中没有花牌（J/Q/K）",
+                    "config": {"remove_faces": True}},
+    "b_checkered": {"cn": "棋盘牌组",
+                    "effect": "牌堆只有 26 张黑桃和 26 张红心",
+                    "config": {"checkered": True}},
+    "b_zodiac": {"cn": "黄道牌组",
+                 "effect": "开局自带塔罗商人、星球商人和过载优惠券",
+                 "config": {"vouchers": ["v_tarot_merchant", "v_planet_merchant", "v_overstock_norm"]}},
+    "b_painted": {"cn": "涂鸦牌组",
+                  "effect": "手牌上限 +2，小丑牌栏位 -1",
+                  "config": {"hand_size": 2, "joker_slot": -1}},
+    "b_anaglyph": {"cn": "浮雕牌组",
+                   "effect": "击败头目盲注后获得 1 个双重标签",
+                   "config": {"double_tag": True}},
+    "b_plasma": {"cn": "等离子牌组",
+                 "effect": "结算时筹码与倍率取平均，盲注难度 ×2",
+                 "config": {"ante_scaling": 2, "plasma": True}},
+    "b_erratic": {"cn": "随机牌组",
+                  "effect": "开局随机化牌堆中每种花色/点数的数量",
+                  "config": {"randomize_rank_suit": True}},
+}
+
+DECK_ORDER = ["b_red", "b_blue", "b_yellow", "b_green", "b_black", "b_magic",
+              "b_nebula", "b_ghost", "b_abandoned", "b_checkered", "b_zodiac",
+              "b_painted", "b_anaglyph", "b_plasma", "b_erratic"]
