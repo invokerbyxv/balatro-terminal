@@ -17,5 +17,15 @@ class BalatroApp(App):
         self.exit()
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> None:
+    """启动 TUI 版本。
+
+    Args:
+        argv: 预留的透传参数，目前 Textual 通过 ``TEXTUAL`` 环境变量接收
+            开发模式等配置，因此这里不做解析。
+    """
     BalatroApp().run()
+
+
+if __name__ == "__main__":
+    main()

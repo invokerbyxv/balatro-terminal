@@ -1,17 +1,33 @@
-"""解析 balatro_lua_source_code/game.lua 中的资源定义(P_CENTERS/P_TAGS/P_BLINDS 等)。
+"""解析 balatro 源码 game.lua 中的资源定义(P_CENTERS/P_TAGS/P_BLINDS 等)。
 
 只提取静态数据:名称、价格、稀有度、config(即描述文本里 #1# #2# 的数值来源)。
+
+源码目录按以下顺序查找,可用环境变量 ``BALATRO_LUA_DIR`` 覆盖:
+``balatro_lua_source_code`` -> ``balatro_source_code``。
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
-GAME_LUA = (
-    Path(__file__).resolve().parent.parent.parent
-    / "balatro_lua_source_code"
-    / "game.lua"
-)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_SOURCE_DIR_NAMES = ("balatro_lua_source_code", "balatro_source_code")
+
+
+def _find_game_lua() -> Path:
+    """定位 game.lua,找不到时返回默认路径(读取时会抛出 FileNotFoundError)。"""
+    override = os.environ.get("BALATRO_LUA_DIR")
+    if override:
+        return Path(override) / "game.lua"
+    for name in _SOURCE_DIR_NAMES:
+        candidate = _PROJECT_ROOT / name / "game.lua"
+        if candidate.is_file():
+            return candidate
+    return _PROJECT_ROOT / _SOURCE_DIR_NAMES[-1] / "game.lua"
+
+
+GAME_LUA = _find_game_lua()
 
 _NUM_RE = re.compile(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
 
