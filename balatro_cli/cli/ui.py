@@ -36,6 +36,49 @@ def disp_len(text: str) -> int:
     return w
 
 
+def truncate(text: str, width: int) -> str:
+    """按显示宽度截断文本（忽略 ANSI 颜色），超出部分以 … 收尾。"""
+    plain = _ANSI_RE.sub("", text)
+    if width <= 0:
+        return ""
+    if disp_len(plain) <= width:
+        return plain
+    # … 是宽度歧义字符，disp_len 按 2 列算，预留时用同一口径
+    ell = "…"
+    budget = width - disp_len(ell)
+    out: List[str] = []
+    w = 0
+    for ch in plain:
+        cw = 2 if unicodedata.east_asian_width(ch) in ("W", "F", "A") else 1
+        if w + cw > budget:
+            break
+        out.append(ch)
+        w += cw
+    return "".join(out) + ell
+
+
+#: 实时消息行中两条消息之间的分隔符
+LOG_SEP = "  │  "
+
+
+def log_line(msgs: Sequence[str], cols: Optional[int] = None, sep: str = LOG_SEP) -> str:
+    """把实时消息排成一行：最旧的在左、最新的在右。
+
+    最多保留 ``len(msgs)`` 条（调用方已截断到最近若干条）；整行放不下时从最旧
+    的一条开始丢弃，只剩一条仍放不下则截断该条。全部为空时返回空串。
+    """
+    limit = (cols if cols is not None else _term_cols()) - 2
+    kept = [str(m) for m in msgs if m]
+    while kept:
+        text = sep.join(kept)
+        if disp_len(text) <= limit:
+            return text
+        if len(kept) == 1:
+            return truncate(kept[0], limit)
+        kept.pop(0)
+    return ""
+
+
 def grid_lines(items: List[str], cols: int) -> List[str]:
     rows = [items[i:i + cols] for i in range(0, len(items), cols)]
     widths = [

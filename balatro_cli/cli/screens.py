@@ -6,6 +6,7 @@ from . import terminal
 from ..core.game import Game
 from ..core.card import Card
 from ..core.items import JokerItem
+from ..core.scoring import blocked_play_reason
 from ..data import decks as deck_data
 from ..data import blinds as blind_data
 from ..data import centers as centers_data
@@ -14,7 +15,7 @@ from ..data import boosters as booster_data
 from ..data import vouchers as voucher_data
 from ..data import tags as tag_data
 
-LOG_LEN = 3
+LOG_LEN = 3   # 实时消息最多保留/展示的条数，更旧的移出
 
 
 class App:
@@ -68,6 +69,8 @@ class App:
                         break
                 elif self.state == "collection":
                     self._collection()
+                elif self.state == "items":
+                    self._items()
             except (EOFError, KeyboardInterrupt):
                 return
 
@@ -75,11 +78,13 @@ class App:
         for m in (msgs or []):
             if m:
                 self.log.append(m)
-        self.log = self.log[-8:]
+        self.log = self.log[-LOG_LEN:]
 
     def _show_log(self):
-        for m in self.log[-LOG_LEN:]:
-            print(f"  {ui.c(m, ui.GRAY)}")
+        """实时消息：一行显示，右为新、左为旧，最多三条，放不下的旧消息移出。"""
+        line = ui.log_line(self.log)
+        if line:
+            print(f"  {ui.c(line, ui.GRAY)}")
 
     def _banner(self, title: str, sub: str = ""):
         head = f"{ui.BOLD}{title}{ui.RESET}"
@@ -100,7 +105,8 @@ class App:
         if row is not None:
             self.regions.extend(ui.button_regions(row, 2, buttons))
 
-    def _jokers(self, sell_mode: bool = False):
+    def _jokers(self):
+        """完整列出小丑牌（二级界面与售卖界面用）。"""
         g = self.game
         if not g.jokers:
             print(f"  {ui.c('（暂无小丑牌）', ui.GRAY)}")
@@ -110,6 +116,7 @@ class App:
             print(" " + ui.joker_line(i + 1, g, j))
 
     def _consumables(self):
+        """完整列出消耗牌（二级界面与售卖界面用）。"""
         g = self.game
         if not g.consumeables:
             print(f"  {ui.c('（暂无消耗牌）', ui.GRAY)}")
@@ -117,6 +124,41 @@ class App:
         print("消耗牌:")
         for i, c in enumerate(g.consumeables):
             print(" " + ui.consumable_line(i + 1, g, c))
+
+    @staticmethod
+    def _slots(n: int, cap: int) -> str:
+        return f"{ui.c(str(n), ui.YELLOW if n >= cap else ui.GREEN)}/{ui.c(str(cap), ui.GRAY)}"
+
+    def _items_line(self, clickable: bool = False):
+        """小丑 / 消耗牌折叠成一行：只显示已拥有数量与上限，按 j 进二级界面看详情。
+
+        ``clickable`` 为真时末尾渲染成可点击的「查看」按钮并登记点击区域
+        （只有把 regions 交给 prompt 的界面才需要）。
+        """
+        g = self.game
+        head = (f"{ui.c('小丑', ui.GRAY)} {self._slots(len(g.jokers), g.joker_slots)}   "
+                f"{ui.c('消耗牌', ui.GRAY)} {self._slots(len(g.consumeables), g.consumable_slots)}   ")
+        if not clickable:
+            print("  " + head + ui.c("（j 查看）", ui.GRAY))
+            return
+        buttons = [("查看", "j")]
+        text, _ = ui.button_row(buttons)
+        row, _ = ui.print_tracked("  " + head + text, measure=True)
+        if row is not None:
+            self.regions.extend(ui.button_regions(row, 2 + ui.disp_len(head), buttons))
+
+    def _items(self):
+        """二级界面：完整查看小丑牌与消耗牌。"""
+        g = self.game
+        self._banner("小丑 / 消耗牌",
+                     f"小丑 {len(g.jokers)}/{g.joker_slots} · 消耗牌 {len(g.consumeables)}/{g.consumable_slots}")
+        self._jokers()
+        self._consumables()
+        self._show_log()
+        print(f"  {ui.c('0', ui.CYAN)} 返回")
+        cmd = ui.prompt()
+        if cmd in ("", "0", "q", "quit"):
+            self.state = self.return_state
 
     def _tags(self):
         g = self.game
@@ -228,8 +270,8 @@ class App:
             else:
                 print(f"  {ui.c('1', ui.CYAN)} 迎战 {label}  （目标 {ui.c(str(g.current_blind_chips()), ui.YELLOW)}{mult}）")
             print(f"  {ui.c('2', ui.CYAN)} {skip_line}")
-        print(f"  {ui.c('3', ui.CYAN)} 查看小丑/消耗牌   {ui.c('u', ui.BLUE)}用消耗  {ui.c('c', ui.CYAN)} 收藏")
-        print(f"  {ui.c('q', ui.CYAN)} 返回菜单")
+        self._items_line()
+        print(f"  {ui.c('u', ui.BLUE)} 用消耗   {ui.c('c', ui.CYAN)} 收藏   {ui.c('q', ui.CYAN)} 返回菜单")
         cmd = ui.prompt()
         if cmd == "1":
             g.select_blind()
@@ -251,8 +293,9 @@ class App:
             else:
                 self._show_log()
                 input("  [回车继续]")
-        elif cmd == "3":
-            self._inspect_jokers()
+        elif cmd == "3" or cmd == "j":
+            self.return_state = "blind"
+            self.state = "items"
         elif cmd == "u":
             self.return_state = "blind"
             self.state = "consume"
@@ -262,12 +305,6 @@ class App:
         elif cmd == "q" or cmd == "quit":
             self.state = "menu"
 
-    def _inspect_jokers(self):
-        self._jokers()
-        self._consumables()
-        self._show_log()
-        input("  [回车继续]")
-
     def _play(self):
         g = self.game
         self.regions = []
@@ -275,8 +312,8 @@ class App:
         self._stats()
         self._tags()
         self._hand_line(clickable=True)
-        self._jokers()
-        self._consumables()
+        self._blocked_hint()
+        self._items_line(clickable=True)
         self._show_log()
         print(f"  选牌：点击卡片或输入序号（如 {ui.c('1 2 3', ui.CYAN)} / {ui.c('1-3', ui.CYAN)}），"
               f"重复输入取消；{ui.c('o 1 2', ui.CYAN)} 换位")
@@ -303,6 +340,9 @@ class App:
             self._push_log(g.messages)
             g.messages.clear()
             self._check_round_over()
+        elif cmd == "j":
+            self.return_state = "play"
+            self.state = "items"
         elif cmd == "u":
             self.return_state = "play"
             self.state = "consume"
@@ -315,6 +355,13 @@ class App:
             self.state = "menu"
         else:
             self._toggle_cards(cmd)
+
+    def _blocked_hint(self):
+        """盲注规则（眼睛/嘴/通灵者）下当前选牌会 0 分时提前提示——牌仍可打出。"""
+        g = self.game
+        reason = blocked_play_reason(g, g.selected_cards())
+        if reason:
+            print(f"  {ui.c('⚠ ' + reason + '，本手打出将不计分', ui.RED)}")
 
     def _toggle_cards(self, cmd: str):
         g = self.game
@@ -518,8 +565,7 @@ class App:
             vd = voucher_data.VOUCHERS[g.shop_voucher]
             price = 0 if g.pending_free_voucher else 10
             print(f"优惠券: {ui.c('v', ui.CYAN)} {ui.BOLD}{vd['cn']}{ui.RESET}  {ui.c('$' + str(price), ui.YELLOW)}  {ui.c(vd['effect'], ui.GRAY)}")
-        self._jokers()
-        self._consumables()
+        self._items_line()
         self._show_log()
         print(f"  {ui.c('r', ui.GREEN)}重掷(${g.calculate_reroll_cost()})  {ui.c('s', ui.YELLOW)}售卖  "
               f"{ui.c('u', ui.BLUE)}用消耗  {ui.c('x', ui.RED)}离开商店  {ui.c('q', ui.RED)}退出游戏")
@@ -537,6 +583,9 @@ class App:
                     self.pack_picked = 0
                     self.pack_selection.clear()
                     self.state = "pack"
+        elif cmd == "j":
+            self.return_state = "shop"
+            self.state = "items"
         elif cmd == "s":
             self.return_state = "shop"
             self.state = "sell"

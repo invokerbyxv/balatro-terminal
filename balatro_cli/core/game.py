@@ -83,7 +83,6 @@ class Game:
         self.hands_played_round = 0
         self.last_hand_name: Optional[str] = None
         self.round_hand_played: List[str] = []   # 眼睛 boss 用（本回合已打牌型）
-        self.first_hand_face_down = True
 
         # 商店
         self.shop_jokers: List[JokerItem] = []
@@ -321,7 +320,7 @@ class Game:
             self.hand_size = max(1, self.hand_size - 1)
         self.reroll_cost_increase = 0
         self.hands_played_round = 0
-        self.first_hand_face_down = True
+        self.last_hand_name = None
         self.discards_used_round = 0
         self.boss_disabled_round = False
         self.pending_consumable = None
@@ -434,8 +433,12 @@ class Game:
         return [c for c in self.hand if getattr(c, "selected", False)]
 
     def play_selected(self) -> List[str]:
-        """打出选中牌，返回过程消息。"""
-        from .scoring import evaluate_play, InvalidPlay
+        """打出选中牌，返回过程消息。
+
+        盲注规则（眼睛/嘴/通灵者）不再阻止出牌，而是让这一手得 0 分，
+        因此这里没有回滚分支：牌一旦打出就离手、出牌次数照扣。
+        """
+        from .scoring import evaluate_play
         if not self.can_play() or self.round_over():
             self.say("当前回合已经结束")
             return []
@@ -452,21 +455,7 @@ class Game:
         self.hands_played_round += 1
         self.hands_played_total += 1
         self.play = played
-        try:
-            msgs = evaluate_play(self)
-        except InvalidPlay as ex:
-            # 无效手牌（盲注规则）：牌放回手中，不消耗出牌次数
-            for c in played:
-                self.hand.append(c)
-            for c in played:
-                self._round_cards.remove(c)
-            self.sort_hand()
-            self.play = []
-            self.hands_left += 1
-            self.hands_played_round -= 1
-            self.hands_played_total -= 1
-            self.say(str(ex))
-            return [str(ex)]
+        msgs = evaluate_play(self)
         self.play = []
         self.hands_left = max(0, self.hands_left)
         # 盲注触发的回合效果

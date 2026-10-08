@@ -14,10 +14,6 @@ from ..data import boosters as booster_data
 from ..data import consumables as consumable_data
 
 
-class InvalidPlay(Exception):
-    """手牌被盲注规则判定无效：牌留在手中，不消耗出牌次数。"""
-
-
 @dataclass
 class Effect:
     """一次效果：任选字段叠加。"""
@@ -157,18 +153,20 @@ def evaluate_play(game) -> List[str]:
     display_name = "皇家同花顺" if is_royal_flush(name, scoring_hand) else HAND_CN.get(name, name)
     boss_disabled = game.boss_disabled()
 
-    # 眼睛 boss：本回合不得重复牌型
-    if not boss_disabled and game.blind_key == "bl_eye" and name in game.round_hand_played:
-        raise InvalidPlay("眼睛：本回合已打过该牌型，无效！")
+    # 盲注判定（眼睛/嘴/通灵者）：条件不满足时仍可打出，只是整手不计分。
+    # 对应 Lua blind.lua Blind:debuff_hand 返回 true —— 此时 evaluate_play 跳过
+    # 整个记分块，但牌已离手、出牌次数照扣（state_events.lua 614）。
+    block = blocked_play_reason(game, played)
 
-    # 嘴 boss：只能打出与上一手相同的牌型（首手不限）
-    if not boss_disabled and game.blind_key == "bl_mouth":
-        if not game.first_hand_face_down and game.last_hand_name != name:
-            raise InvalidPlay("嘴：只能打出与上一手相同的牌型！")
-        game.first_hand_face_down = False
-
+    # 无论是否计分都要记录：Lua 在记分块之前就自增 played 并写入 played_this_ante
     game.last_hand_name = name
     game.round_hand_played.append(name)
+    game.hands_count[name] = game.hands_count.get(name, 0) + 1
+    game.played_this_ante.extend(played)
+
+    if block:
+        msgs.append(f"{block}，本手不计分")
+        return msgs
 
     # Step 2: 额外记分牌（石头牌总是记分；Splash 所有牌都记分）
     extra = []
@@ -178,14 +176,6 @@ def evaluate_play(game) -> List[str]:
     if game.any_joker("j_splash"):
         extra = [c for c in played if c not in scoring_hand]
     scoring_hand = scoring_hand + [c for c in extra if c not in scoring_hand]
-
-    # Step 3: 盲注 debuff 检查
-    if _blind_disallows_hand(game, name, scoring_hand):
-        raise InvalidPlay(f"盲注效果：不允许打出 {display_name}！")
-
-    # 通灵者：必须打满 5 张
-    if not boss_disabled and game.blind_key == "bl_psychic" and len(played) < 5:
-        raise InvalidPlay("通灵者：必须打出 5 张牌才能得分！")
 
     # Step 4: 基础数值
     mult, hand_chips = hand_level_stats(name, game.hand_levels[name])
@@ -371,9 +361,6 @@ def evaluate_play(game) -> List[str]:
             continue
         for ef in calculate_joker(game, j, ctx):
             hand_chips, mult = _apply(game, ef, hand_chips, mult, msgs)
-    game.hands_count.setdefault(name, 0)
-    game.hands_count[name] += 1
-    game.played_this_ante.extend(played)
     return msgs
 
 
@@ -411,11 +398,39 @@ def format_formula(bd, display_name, hand_chips, mult, final_score) -> str:
     return (f"打出 {display_name}：（{' + '.join(chips)}） × （{' '.join(muls)}） = {final_score}")
 
 
-def _blind_disallows_hand(game, name, scoring_hand) -> bool:
-    """返回 True 则整手牌无效。"""
-    if game.blind_key == "bl_psychic" and len(scoring_hand) < 5:
-        return True
-    return False
+def _hand_name(game, cards: List[Card]) -> str:
+    """按当前小丑（四根手指/捷径/涂抹）判定这组牌的牌型名。"""
+    name, _ = evaluate_poker_hand(
+        cards,
+        four_fingers=game.any_joker("j_four_fingers"),
+        shortcut=game.any_joker("j_shortcut"),
+        smeared=game.any_joker("j_smeared"),
+    )
+    return name
+
+
+def blocked_play_reason(game, cards: List[Card]) -> Optional[str]:
+    """这组牌在盲注规则下是否会「可打出但不计分」，是则返回原因，否则 None。
+
+    对应 Lua blind.lua Blind:debuff_hand 返回 true 的三种头目（眼睛/嘴/通灵者）：
+    它们不禁止出牌，只是让这一手得 0 分。纯判定，不改动任何状态，因此出牌界面
+    也能用它提前提示玩家。奇科特等禁用头目效果时一律不触发。
+    """
+    if not cards or game.boss_disabled():
+        return None
+    b = game.blind_key
+    if b == "bl_psychic" and len(cards) < 5:
+        return "通灵者：必须打出 5 张牌才能得分"
+    if b == "bl_eye":
+        name = _hand_name(game, cards)
+        if name in game.round_hand_played:
+            return f"眼睛：本回合已打过{HAND_CN.get(name, name)}"
+    if b == "bl_mouth" and game.round_hand_played:
+        name = _hand_name(game, cards)
+        if name != game.last_hand_name:
+            last = HAND_CN.get(game.last_hand_name or "", "上一手的牌型")
+            return f"嘴：本回合只能打出{last}"
+    return None
 
 
 def _apply_effect(game, ef, mult, hand_chips, bd=None, label=""):
