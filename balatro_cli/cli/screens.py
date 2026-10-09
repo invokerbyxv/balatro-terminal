@@ -163,10 +163,34 @@ class App:
         self._consumables()
         self._tags()
         self._show_log()
-        print(f"  {ui.c('0', ui.CYAN)} 返回")
+        hint = f"{ui.c('0', ui.CYAN)} 返回"
+        if len(g.jokers) >= 2:
+            hint = f"输入两个{ui.c('小丑序号', ui.CYAN)}（空格间隔）交换位置   " + hint
+        print(f"  {hint}")
         cmd = ui.prompt()
         if cmd in ("", "0", "q", "quit"):
             self.state = self.return_state
+            return
+        self._swap_jokers(cmd)
+
+    def _swap_jokers(self, cmd: str) -> bool:
+        """输入「序号1 序号2」交换两张小丑的位置（小丑的先后决定计分顺序）。"""
+        g = self.game
+        parts = cmd.replace(",", " ").split()
+        if len(parts) != 2 or not all(p.isdigit() for p in parts):
+            print("  用法：输入两个小丑序号（空格间隔），如 1 3")
+            input("  [回车继续]")
+            return False
+        a, b = int(parts[0]) - 1, int(parts[1]) - 1
+        if not (0 <= a < len(g.jokers) and 0 <= b < len(g.jokers)):
+            print("  无效的小丑序号")
+            input("  [回车继续]")
+            return False
+        if a == b:
+            return False
+        g.jokers[a], g.jokers[b] = g.jokers[b], g.jokers[a]
+        self._push_log([f"重排小丑：交换 #{a + 1} 与 #{b + 1}"])
+        return True
 
     # ------------------------------------------------------------------
     # 信息界面（i）

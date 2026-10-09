@@ -1438,8 +1438,6 @@ def on_blind_select(game):
             game.hand_size += 1
         elif k == "j_drunkard":
             game.discards_left += 1
-        elif k == "j_chaos":
-            game.free_rerolls += 1
         elif k == "j_todo_list":
             j.stat["todo"] = game.rng.choice(list(HAND_ORDER))
         elif k == "j_ancient":

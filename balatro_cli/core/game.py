@@ -65,7 +65,7 @@ class Game:
         self.discount_percent = 0
         self.shop_free = False
         self.temp_reroll_cost: Optional[int] = None
-        self.free_rerolls = 0
+        self.free_reroll_used = False
         self.shop_joker_max = 2
 
         # 进度
@@ -683,6 +683,7 @@ class Game:
         self.shop_boosters = []
         self.shop_voucher = None
         self.shop_free = False
+        self.free_reroll_used = False   # 混沌小丑的免费重掷每商店一次
         # 应用标签（版本类标签由 _make_joker_for_shop 在生成商品时消费）。跨商店保留的
         # 标签会再经过这里一次，但它们的效果都是 no-op，不会重复触发。
         for tag in list(self.tags):
@@ -1034,16 +1035,30 @@ class Game:
     def _advance_blind_from_shop(self):
         pass  # 盲注推进由 end_round 完成
 
+    @property
+    def free_rerolls(self) -> int:
+        """混沌小丑：每个商店首次重掷免费，多张不叠加。
+
+        由「是否拥有混沌小丑」实时推导，因此商店中买入即生效、卖出即失效；
+        每商店在 enter_shop 重置一次。
+        """
+        if self.free_reroll_used or not self.any_joker("j_chaos"):
+            return 0
+        return 1
+
     def reroll_shop(self) -> bool:
+        free = self.free_rerolls > 0
         cost = self.calculate_reroll_cost()
-        if self.free_rerolls > 0:
-            self.free_rerolls -= 1
+        if free:
+            self.free_reroll_used = True
         elif not self.can_afford(cost):
             self.say("金钱不足")
             return False
         else:
             self.dollars -= cost
-        self.reroll_cost_increase += 1
+        # 免费重掷不抬高后续价格（原版 calculate_reroll_cost(final_free) 的 skip_increment）
+        if not free:
+            self.reroll_cost_increase += 1
         self.rerolls_total += 1
         from .effects import on_reroll
         on_reroll(self)
@@ -1056,6 +1071,8 @@ class Game:
             self.shop_jokers.append(self._generate_shop_goods())
 
     def calculate_reroll_cost(self) -> int:
+        if self.free_rerolls > 0:
+            return 0
         base = self.temp_reroll_cost if self.temp_reroll_cost is not None else self.reroll_cost_base
         return max(0, base + self.reroll_cost_increase)
 
