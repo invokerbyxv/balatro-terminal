@@ -21,6 +21,8 @@ class JokerItem:
     stat: dict = field(default_factory=dict)
     sell_price: int = field(default=0)
     buy_cost: int = field(default=0)
+    # 标签带来的免费商品（Lua ability.couponed）：在商店内售价为 0
+    couponed: bool = field(default=False)
     # 标签临时禁用（深红之心）
     disabled_round: bool = field(default=False)
 

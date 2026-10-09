@@ -230,6 +230,13 @@ def joker_line(idx: int, game, j) -> str:
     return line + f"  {c(desc, GRAY)}"
 
 
+def tag_line(tag) -> str:
+    """标签一行：名称 + 效果。标签不可操作，因此不编号。"""
+    from ..data import tags as td
+    d = td.TAGS.get(tag.key, {})
+    return f"{c(d.get('cn', tag.key), MAGENTA)}  {c(d.get('effect', ''), GRAY)}"
+
+
 def consumable_line(idx: int, game, item) -> str:
     from ..data import consumables as cd
     from ..core.hand_eval import HAND_CN

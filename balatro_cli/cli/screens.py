@@ -134,7 +134,7 @@ class App:
         return f"{ui.c(str(n), ui.YELLOW if n >= cap else ui.GREEN)}/{ui.c(str(cap), ui.GRAY)}"
 
     def _items_line(self, clickable: bool = False):
-        """小丑 / 消耗牌折叠成一行：只显示已拥有数量与上限，按 j 进二级界面看详情。
+        """小丑 / 消耗牌 / 标签折叠成一行：只显示已拥有数量，按 j 进二级界面看详情。
 
         ``clickable`` 为真时末尾渲染成可点击的「查看」按钮并登记点击区域
         （只有把 regions 交给 prompt 的界面才需要）。
@@ -142,6 +142,8 @@ class App:
         g = self.game
         head = (f"{ui.c('小丑', ui.GRAY)} {self._slots(len(g.jokers), g.joker_slots)}   "
                 f"{ui.c('消耗牌', ui.GRAY)} {self._slots(len(g.consumeables), g.consumable_slots)}   ")
+        if g.tags:
+            head += f"{ui.c('标签', ui.GRAY)} {ui.c(str(len(g.tags)), ui.MAGENTA)}   "
         if not clickable:
             print("  " + head + ui.c("（j 查看）", ui.GRAY))
             return
@@ -152,12 +154,14 @@ class App:
             self.regions.extend(ui.button_regions(row, 2 + ui.disp_len(head), buttons))
 
     def _items(self):
-        """二级界面：完整查看小丑牌与消耗牌。"""
+        """二级界面：完整查看小丑牌、消耗牌与标签。"""
         g = self.game
-        self._banner("小丑 / 消耗牌",
-                     f"小丑 {len(g.jokers)}/{g.joker_slots} · 消耗牌 {len(g.consumeables)}/{g.consumable_slots}")
+        self._banner("小丑 / 消耗牌 / 标签",
+                     f"小丑 {len(g.jokers)}/{g.joker_slots} · 消耗牌 {len(g.consumeables)}/{g.consumable_slots}"
+                     f" · 标签 {len(g.tags)}")
         self._jokers()
         self._consumables()
+        self._tags()
         self._show_log()
         print(f"  {ui.c('0', ui.CYAN)} 返回")
         cmd = ui.prompt()
@@ -253,16 +257,14 @@ class App:
             print(f"  {ui.BOLD}{d['cn']}{ui.RESET}  {ui.c(d['effect'], ui.GRAY)}")
 
     def _tags(self):
+        """完整列出持有的标签（二级界面用）。"""
         g = self.game
         if not g.tags:
+            print(f"  {ui.c('（暂无标签）', ui.GRAY)}")
             return
         print("标签:")
         for t in g.tags:
-            d = tag_data.TAGS.get(t.key)
-            if d:
-                print(f"  {ui.c(d['cn'], ui.MAGENTA)}  {ui.c(d['effect'], ui.GRAY)}")
-            else:
-                print(f"  {ui.c(t.key, ui.MAGENTA)}")
+            print(" " + ui.tag_line(t))
 
     def _stats(self):
         g = self.game
@@ -312,6 +314,7 @@ class App:
             if cfg.get("voucher"): bonus.append("自带优惠券")
             if cfg.get("remove_faces"): bonus.append("去掉人头排")
             if cfg.get("checkered"): bonus.append("只有黑桃与红心")
+            if cfg.get("double_tag"): bonus.append("击败头目得双重标签")
             if cfg.get("no_interest"): bonus.append("无利息")
             if cfg.get("ante_scaling", 1) == 2: bonus.append("等离子记分")
             if cfg.get("randomize_rank_suit"): bonus.append("随机花色点数")
@@ -341,7 +344,6 @@ class App:
     def _blind_select(self):
         g = self.game
         self._banner(f"第 {g.ante} 底注 · 选择盲注", "跳过可获得标签")
-        self._tags()
         # 预览跳过后会获得的标签（reset_blinds 已预生成，所见即所得）
         tag_key = g.blind_tag_key(g.blind_on_deck)
         if tag_key:
@@ -406,7 +408,6 @@ class App:
         self.regions = []
         self._blind_meta()
         self._stats()
-        self._tags()
         self._hand_line(clickable=True)
         self._blocked_hint()
         self._items_line(clickable=True)
@@ -640,7 +641,6 @@ class App:
     def _shop(self):
         g = self.game
         self._banner(f"商店 · 第 {g.ante} 底注", f"金钱 {ui.c('$' + str(g.dollars), ui.YELLOW)}")
-        self._tags()
         if g.shop_jokers:
             print("商品:")
             for i, item in enumerate(g.shop_jokers):

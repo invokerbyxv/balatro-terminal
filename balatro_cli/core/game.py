@@ -25,6 +25,10 @@ START_PARAMS = {
 
 WIN_ANTE = 8
 
+#: 离开商店时保留的标签：它们的效果要等到后续事件才触发（双重标签等下一个标签、
+#: 版本标签等下一张商店小丑），原版会一直留在收藏里；其余标签进商店即已生效。
+PERSISTENT_TAGS = {"tag_double", "tag_foil", "tag_holo", "tag_polychrome", "tag_negative"}
+
 
 class Game:
     def __init__(self, seed: Optional[int] = None):
@@ -302,18 +306,29 @@ class Game:
         """当前底注下，跳过某盲注（Small/Big/Boss）会获得的标签键；由 reset_blinds 预生成。"""
         return self.blind_tags.get(blind)
 
+    def add_tag(self, key: str) -> Tag:
+        """获得一个标签（对应 Lua add_tag）。
+
+        每获得一个新标签，收藏里每个「双重标签」都会复制一份新标签并消耗自身
+        （tag.lua 的 tag_add 上下文）；双重标签本身不会再被复制。
+        """
+        tag = Tag(key=key, skips=self.skips)
+        self.tags.append(tag)
+        self.say(f"获得标签：{tag_data.TAGS[key]['cn']}")
+        if key != "tag_double":
+            for i in reversed([i for i, t in enumerate(self.tags) if t.key == "tag_double"]):
+                self.tags.pop(i)
+                self.tags.append(Tag(key=key, skips=self.skips))
+                self.say(f"双重标签：复制 {tag_data.TAGS[key]['cn']}")
+        return tag
+
     def skip_blind(self) -> bool:
         """跳过当前盲注。返回 True 表示本底注结束（应进入商店）。"""
         self.skips += 1
+        self.say("跳过了盲注")
         tag_key = self.blind_tag_key(self.blind_on_deck) or self.next_tag_key()
         if tag_key:
-            self.tags.append(Tag(key=tag_key, skips=self.skips))
-            self.say(f"跳过了盲注，获得标签：{tag_data.TAGS[tag_key]['cn']}")
-            # 双重标签（tag.lua tag_add）：复制刚获得的非双重标签，并消耗自身
-            if tag_key != "tag_double" and any(t.key == "tag_double" for t in self.tags[:-1]):
-                self.tags.append(Tag(key=tag_key, skips=self.skips))
-                self.tags = [t for t in self.tags if t.key != "tag_double"]
-                self.say(f"双重标签：复制 {tag_data.TAGS[tag_key]['cn']}")
+            self.add_tag(tag_key)
         return self._advance_blind()
 
     def _advance_blind(self) -> bool:
@@ -604,6 +619,10 @@ class Game:
             return
         if not skipped:
             self.bosses_used.append(self.boss_key or "")
+            # 浮雕牌组：击败头目盲注后获得一个双重标签（back.lua trigger_effect / eval）。
+            # 跳过头目不触发（原版在打出手牌结算时触发），故放在 skipped 分支里。
+            if self.deck_key == "b_anaglyph":
+                self.add_tag("tag_double")
         self.ante += 1
         self.boss_key = self._get_new_boss()
         self.reset_blinds()
@@ -664,7 +683,8 @@ class Game:
         self.shop_boosters = []
         self.shop_voucher = None
         self.shop_free = False
-        # 应用标签（版本类标签由 _make_joker_for_shop 在生成商品时消费）
+        # 应用标签（版本类标签由 _make_joker_for_shop 在生成商品时消费）。跨商店保留的
+        # 标签会再经过这里一次，但它们的效果都是 no-op，不会重复触发。
         for tag in list(self.tags):
             self._apply_tag(tag)
         # 生成商品
@@ -684,7 +704,7 @@ class Game:
                 rarity = {"uncommon": 2, "rare": 3}[free_joker_rarity]
                 key = centers_data.random_joker_key(self, rarity=rarity)
                 j = self._make_joker_for_shop(key)
-                j.buy_cost = 0
+                j.couponed = True   # 免费小丑：商店内售价 0（原版 ability.couponed）
                 self.shop_jokers.append(j)
                 self.say(f"免费小丑：{centers_data.joker_cfg(key)['cn']}")
                 continue
@@ -712,12 +732,14 @@ class Game:
         j = JokerItem(key=key)
         j.buy_cost = centers_data.joker_price(key, self.dollars)
         j.sell_price = max(1, cfg.get("cost", 1) // 2)
-        # 标签应用版本（tag.lua store_joker_modify）：首个商店小丑获得版本后标签即被消费
+        # 标签应用版本（tag.lua store_joker_modify）：首个商店小丑获得版本后标签即被消费；
+        # 这类小丑同时带 couponed，在商店内免费
         for tag in list(self.tags):
             if tag.key in ("tag_foil", "tag_holo", "tag_polychrome", "tag_negative"):
                 if j.edition is None:
                     j.edition = {"tag_foil": "foil", "tag_holo": "holo",
                                  "tag_polychrome": "poly", "tag_negative": "negative"}[tag.key]
+                    j.couponed = True
                     self.tags.remove(tag)
                     break
         return j
@@ -772,6 +794,9 @@ class Game:
         return price
 
     def shop_item_price(self, item) -> int:
+        # 标签带来的免费小丑（tag.lua 的 couponed → set_cost 置 0）
+        if isinstance(item, JokerItem) and item.couponed:
+            return 0
         # 天文学家：星球牌与星球包免费
         if self.any_joker("j_astronomer"):
             if isinstance(item, ConsumableItem) and item.key in consumable_data.PLANETS:
@@ -1000,8 +1025,9 @@ class Game:
         from .effects import on_shop_closed
         on_shop_closed(self)
         self.temp_reroll_cost = None
-        # 标签已在本商店应用完毕，离开时全部消费，避免下一商店重复触发
-        self.tags.clear()
+        # 进商店时已生效的标签在此消费，避免下次商店重复触发；双重标签与没被商店
+        # 小丑用掉的版本标签留到后续事件（原版标签一直留在收藏里直到触发为止）。
+        self.tags = [t for t in self.tags if t.key in PERSISTENT_TAGS]
         # 检查下一盲注
         self._advance_blind_from_shop()
 

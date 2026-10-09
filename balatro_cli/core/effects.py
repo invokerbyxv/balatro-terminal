@@ -1344,7 +1344,7 @@ def apply_tag(game, tag: Tag):
     elif k == "tag_coupon":
         game.shop_free = True
     elif k == "tag_double":
-        pass  # 复制下一个标签（enter_shop 中处理）
+        pass  # 复制下一个标签，由 Game.add_tag 在获得标签时处理
     elif k == "tag_juggle":
         game.hand_size += 3
     elif k == "tag_d_six":
