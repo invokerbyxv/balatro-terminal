@@ -1030,18 +1030,18 @@ def _apply_consumable(game, item: ConsumableItem) -> str:
         game.consumeables.remove(item)
         return "done"
     if key == "c_high_priestess":
+        game.consumeables.remove(item)
         for _ in range(2):
             pk = game.rng.choice(list(consumable_data.PLANETS))
             game.gain_consumable(pk)
         game.say("女祭司：生成 2 张星球牌")
-        game.consumeables.remove(item)
         return "done"
     if key == "c_emperor":
+        game.consumeables.remove(item)
         for _ in range(2):
             tk = game.rng.choice(list(consumable_data.TAROTS))
             game.gain_consumable(tk)
         game.say("皇帝：生成 2 张塔罗牌")
-        game.consumeables.remove(item)
         return "done"
     if key == "c_hermit":
         gain = min(game.dollars, 20)
