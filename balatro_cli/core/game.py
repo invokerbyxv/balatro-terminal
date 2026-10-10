@@ -295,13 +295,15 @@ class Game:
         return hands, discards
 
     def round_hand_size(self, blind_key: Optional[str] = None) -> int:
-        """本回合的手牌上限（含牌组与优惠券加成、头目限制）。"""
+        """本回合的手牌上限（含牌组、小丑与优惠券加成、头目限制）。"""
+        from .effects import joker_hand_size_bonus
         key = blind_key or self.current_blind_key()
         cfg = deck_data.DECKS[self.deck_key]["config"] if self.deck_key else {}
         n = START_PARAMS["hand_size"] + cfg.get("hand_size", 0) + self._voucher_bonus("hand_size")
+        n += joker_hand_size_bonus(self)
         if key == "bl_manacle":
-            n = max(1, n - 1)
-        return n
+            n -= 1
+        return max(1, n)
 
     def blind_cn(self, key: str) -> str:
         return blind_data.get_blind_cfg(key)["cn"]
@@ -363,7 +365,6 @@ class Game:
         # 注意：played_this_ante 在整个底注内累积（柱头 boss），在 reset_blinds（新底注）时清空
         self.round_hand_played = []
         self.hands_left, self.discards_left = self.round_counts(key)
-        self.hand_size = self.round_hand_size(key)
         self.reroll_cost_increase = 0
         self.hands_played_round = 0
         self.last_hand_name = None
@@ -374,6 +375,9 @@ class Game:
         # 小丑选盲注触发 + 每轮轮换目标
         from .effects import on_blind_select
         on_blind_select(self)
+        # 手牌上限：牌组/优惠券/小丑加成 + 头目限制。放在 on_blind_select 之后，
+        # 乌合之众当场获得的小丑也算入本回合。
+        self.hand_size = self.round_hand_size(key)
         # 头目 debuff：禁用花色/人头牌
         boss_ok = not self.boss_disabled()
         for c in self.hand:

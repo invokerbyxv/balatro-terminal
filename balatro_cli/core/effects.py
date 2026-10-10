@@ -1381,6 +1381,32 @@ def blind_boss_cn(game) -> str:
 # ==========================================================================
 # 事件钩子（由 game.py 调用）
 # ==========================================================================
+
+#: 小丑对手牌上限的常驻增减（对应 Lua joker config 的 h_size）
+HAND_SIZE_EFFECT = {
+    "j_juggler": 1,
+    "j_merry_andy": -1,
+    "j_troubadour": 2,
+    "j_stuntman": -2,
+    "j_turtle_bean": 5,
+}
+
+
+def joker_hand_size_bonus(game) -> int:
+    """持有小丑对手牌上限的常驻增减；被禁用的小丑不生效。
+
+    黑龟豆的每轮增减累计记在 j.stat["hand_size"]。
+    """
+    n = 0
+    for j in game.jokers:
+        if j.debuffed:
+            continue
+        base = HAND_SIZE_EFFECT.get(j.key)
+        if base is not None:
+            n += base + j.stat.get("hand_size", 0)
+    return n
+
+
 def on_blind_select(game):
     """选中盲注时触发：被动成长/生成系小丑 + 每轮轮换目标。"""
     for j in list(game.jokers):
@@ -1426,16 +1452,10 @@ def on_blind_select(game):
             game.hand.append(_random_card(game, seal=True))
             game.sort_hand()
             game.say("证书：随机蜡封牌入手")
-        elif k == "j_turtle_bean":
-            game.hand_size += 5
         elif k == "j_troubadour":
-            game.hand_size += 2
             game.hands_left = max(1, game.hands_left - 1)
         elif k == "j_merry_andy":
             game.discards_left += 3
-            game.hand_size = max(1, game.hand_size - 1)
-        elif k == "j_juggler":
-            game.hand_size += 1
         elif k == "j_drunkard":
             game.discards_left += 1
         elif k == "j_todo_list":
@@ -1525,6 +1545,8 @@ def on_end_round(game, boss_beaten: bool = False):
                 game.jokers.remove(j)
                 game.say("卡文迪许消失了！")
         elif k == "j_turtle_bean":
+            # 每轮 -1 记在 stat 里（累计），否则下回合开始会被 round_hand_size 重算冲掉
+            j.stat["hand_size"] = j.stat.get("hand_size", 0) - 1
             game.hand_size = max(1, game.hand_size - 1)
         if j.rental and not j.eternal:
             cost = j.sell_value()
