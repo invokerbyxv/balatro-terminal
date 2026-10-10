@@ -56,6 +56,8 @@ class Card:
     edition: Optional[str] = None
     seal: Optional[str] = None
     debuffed: bool = False
+    #: 背面朝下（对应 card.lua 的 facing == 'back'）：牌面信息对外隐藏，显示为 ?
+    face_down: bool = False
     uid: int = field(default=0, compare=False)
 
     seal_purple_used: bool = field(default=False, compare=False)
@@ -97,6 +99,8 @@ class Card:
 
     # ---------- 显示 ----------
     def display(self) -> str:
+        if self.face_down:
+            return "?"
         s = f"{SUIT_DISPLAY[self.suit]}{self.rank}"
         tags = []
         if self.enhanced:
@@ -110,6 +114,8 @@ class Card:
         return s
 
     def short(self) -> str:
+        if self.face_down:
+            return "?"
         s = f"{SUIT_DISPLAY[self.suit]}{self.rank}"
         if self.enhanced == "steel":
             s += "钢"
@@ -122,7 +128,8 @@ class Card:
     def copy(self) -> "Card":
         c = Card(
             rank=self.rank, suit=self.suit, enhanced=self.enhanced,
-            edition=self.edition, seal=self.seal, debuffed=self.debuffed, uid=self.uid,
+            edition=self.edition, seal=self.seal, debuffed=self.debuffed,
+            face_down=self.face_down, uid=self.uid,
         )
         c.seal_purple_used = self.seal_purple_used
         return c

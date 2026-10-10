@@ -79,6 +79,9 @@ class Game:
         self.boss_key: Optional[str] = None
         self.skips = 0
         self.bosses_used: List[str] = []
+        #: 头目盲注的「已准备」标记（对应 blind.lua 的 self.prepped）：鱼在打出牌后
+        #: 置位，紧随其后的那次补牌抽到的牌保持背面朝下，补牌结束即清除。
+        self.blind_prepped = False
 
         # 手牌等级
         from .hand_eval import HAND_ORDER
@@ -356,6 +359,7 @@ class Game:
         self.last_hand_name = None
         self.discards_used_round = 0
         self.boss_disabled_round = False
+        self.blind_prepped = False
         self.pending_consumable = None
         # 小丑选盲注触发 + 每轮轮换目标
         from .effects import on_blind_select
@@ -408,11 +412,22 @@ class Game:
                 c.debuffed = False
             else:
                 self._apply_boss_debuffs()
-            # 轮子 boss：1/7 概率背面朝上（显示隐藏）
+            if self.blind_stays_flipped(c):
+                c.face_down = True
             need -= 1
+        # 对应 Blind:drawn_to_hand：补牌结束即清除 prepped，只有紧随出牌的那一批牌保持背面
+        self.blind_prepped = False
         self.sort_hand()
         if self.deck.count() == 0 and len(self.hand) == 0:
             self.say("牌组已耗尽！")
+
+    def blind_stays_flipped(self, card: Card) -> bool:
+        """刚抽到手牌的牌是否保持背面朝下（对应 blind.lua 的 Blind:stay_flipped）。"""
+        if self.boss_disabled():
+            return False
+        if self.blind_key == "bl_fish" and self.blind_prepped:
+            return True
+        return False
 
     def _recycle_round_cards(self):
         """回合结束时将手牌与弃牌堆洗回牌组，销毁牌不再回收。"""
@@ -425,6 +440,7 @@ class Game:
             seen.add(cid)
             card.selected = False
             card.debuffed = False
+            card.face_down = False
             cards.append(card)
         self.deck.cards.extend(cards)
         self.deck.shuffle(self.rng)
@@ -488,9 +504,15 @@ class Game:
         self.hands_played_round += 1
         self.hands_played_total += 1
         self.play = played
+        # 进入出牌区的牌翻回正面（对应 CardArea:emplace），打出后牌面可见
+        for c in played:
+            c.face_down = False
         msgs = evaluate_play(self)
         self.play = []
         self.hands_left = max(0, self.hands_left)
+        # 鱼：本次出牌后补进手牌的牌保持背面朝下（对应 Blind:press_play 置 prepped）
+        if self.blind_key == "bl_fish" and not self.boss_disabled():
+            self.blind_prepped = True
         # 盲注触发的回合效果
         self._after_play_blind_effects()
         # 补牌至手牌上限
@@ -1086,6 +1108,9 @@ class Game:
             self.jokers.pop(index)
             if j.key == "j_luchador":
                 self.boss_disabled_round = True
+                # 对应 Blind:disable：头目效果被禁用后，手牌里背面朝下的牌翻回正面
+                for c in self.hand:
+                    c.face_down = False
                 self.say("摔跤手：禁用当前头目盲注效果")
             self.say("售出小丑牌")
             return True
