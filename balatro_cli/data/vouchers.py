@@ -78,18 +78,20 @@ VOUCHERS = {
 UPGRADE_MAP = {d.get("upgrade"): k for k, d in VOUCHERS.items() if "upgrade" in d}
 
 
-def get_next_voucher(used: set) -> str | None:
-    """商店应出售的下一张优惠券：优先已购券的升级券，否则任意未购入的一级券。
+def voucher_pool(used: set) -> list[str]:
+    """当前可抽取的优惠券池（对应 common_events.lua get_current_pool('Voucher')）。
 
-    保证商店每店默认出售一张优惠券（全部买完才返回 None）。
+    未购入的一级券，加上已购一级券对应的二级券 —— 因此同一类型仍保证先基础后增强。
     """
-    # 1) 升级券：已购一级券对应的二级券
-    for key, d in VOUCHERS.items():
-        req = d.get("requires")
-        if req and req in used and key not in used:
-            return key
-    # 2) 兜底：任意未购入的一级券
-    for key, d in VOUCHERS.items():
-        if key not in used and d.get("requires") is None:
-            return key
-    return None
+    return [k for k, d in VOUCHERS.items()
+            if k not in used and (d.get("requires") is None or d["requires"] in used)]
+
+
+def get_next_voucher_key(rng, used: set) -> str | None:
+    """随机抽取本底注的优惠券（对应 common_events.lua get_next_voucher_key）。
+
+    池内等概率随机；每个底注只抽一次（击败头目盲注后的回合重置），同一底注内的
+    各商店展示同一张，兑换后本底注不再出现。全部买完返回 None。
+    """
+    pool = voucher_pool(used)
+    return rng.choice(pool, "voucher") if pool else None

@@ -94,6 +94,8 @@ class Game:
         # 商店
         self.shop_jokers: List[JokerItem] = []
         self.shop_boosters: List[BoosterPack] = []
+        #: 本底注的优惠券（对应 G.GAME.current_round.voucher）：每个底注只随机抽一次
+        #: （开局与击败头目后的回合重置），同一底注内的各商店展示同一张，兑换后清空。
         self.shop_voucher: Optional[str] = None
         self.used_vouchers: set = set()
         self.inflation = 0
@@ -122,7 +124,6 @@ class Game:
         self.rerolls_total = 0
         self.pending_consumable: Optional[ConsumableItem] = None
         self.pending_pack: Optional[dict] = None
-        self.shop_voucher_override: Optional[str] = None
         self.pending_shop_free_joker: Optional[str] = None
         self.pending_free_voucher = False
         self.investment_tag_active = False
@@ -204,6 +205,8 @@ class Game:
 
         self.boss_key = self._get_new_boss()
         self.reset_blinds()
+        # 对应 game.lua 2178：开局即抽出本底注的优惠券
+        self.shop_voucher = self._next_voucher_key()
         self.say(f"开始新的一局（{deck_data.DECKS[deck_key]['cn']}）")
 
     def _randomize_deck(self):
@@ -304,6 +307,10 @@ class Game:
         """随机抽取一个标签（对应 Lua get_next_tag_key），用于预生成各盲注的跳过标签。"""
         keys = [k for k, d in tag_data.TAGS.items() if d["min_ante"] <= self.ante]
         return self.rng.choice(keys, "tag") if keys else None
+
+    def _next_voucher_key(self) -> Optional[str]:
+        """随机抽取本底注的优惠券（对应 Lua get_next_voucher_key）。"""
+        return voucher_data.get_next_voucher_key(self.rng, self.used_vouchers)
 
     def blind_tag_key(self, blind: str) -> Optional[str]:
         """当前底注下，跳过某盲注（Small/Big/Boss）会获得的标签键；由 reset_blinds 预生成。"""
@@ -648,10 +655,9 @@ class Game:
         self.ante += 1
         self.boss_key = self._get_new_boss()
         self.reset_blinds()
-        # 通关 Boss 后刷新优惠券
-        nk = voucher_data.get_next_voucher(self.used_vouchers)
-        if nk:
-            self.shop_voucher_override = nk
+        # 对应 state_events.lua 263：只有头目盲注结束（击败或跳过）触发回合重置时才重新抽券；
+        # 小/大盲注结束不刷新，同一底注内的商店展示同一张。
+        self.shop_voucher = self._next_voucher_key()
         self.say(f"进入第 {self.ante} 底注")
 
     def _round_income(self, boss_beaten: bool = False, blind_key: Optional[str] = None):
@@ -703,7 +709,8 @@ class Game:
     def enter_shop(self):
         self.shop_jokers = []
         self.shop_boosters = []
-        self.shop_voucher = None
+        # 优惠券不随商店刷新：本底注抽到的那张在整个底注内保持不变（对应
+        # G.GAME.current_round.voucher），兑换后本底注剩余商店不再出现。
         self.shop_free = False
         self.free_reroll_used = False   # 混沌小丑的免费重掷每商店一次
         # 应用标签（版本类标签由 _make_joker_for_shop 在生成商品时消费）。跨商店保留的
@@ -743,11 +750,6 @@ class Game:
             cfg = booster_data.BOOSTERS[pk]
             self.shop_boosters.append(BoosterPack(key=pk, cost=cfg["cost"], buy_cost=cfg["cost"]))
         self.last_shop_was_first = True
-        # 【优惠券】默认一张
-        nk = self.shop_voucher_override or voucher_data.get_next_voucher(self.used_vouchers)
-        self.shop_voucher_override = None
-        if nk:
-            self.shop_voucher = nk
 
     def _make_joker_for_shop(self, key: str):
         from ..data import centers as centers_data
@@ -895,7 +897,7 @@ class Game:
             return False
         self.dollars -= price
         vk = self.shop_voucher
-        self.shop_voucher = None
+        self.shop_voucher = None   # 对应 card.lua 1850：兑换后本底注不再出现优惠券
         self.pending_free_voucher = False
         self.redeem_voucher(vk)
         return True
