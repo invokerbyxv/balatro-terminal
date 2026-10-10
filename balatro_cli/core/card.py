@@ -82,11 +82,32 @@ class Card:
     def is_face(self) -> bool:
         return self.rank in ("J", "Q", "K")
 
-    def is_suit(self, suit: str, flush_calc: bool = False, smeared: bool = False) -> bool:
-        if self.enhanced == "stone":
-            return False
-        if self.enhanced == "wild":
-            return True
+    def is_suit(self, suit: str, bypass_debuff: bool = False, flush_calc: bool = False,
+                smeared: bool = False) -> bool:
+        """这张牌是否算作 ``suit``（对应 card.lua 的 Card:is_suit(suit, bypass_debuff, flush_calc)）。
+
+        两条分支不能混用：
+
+        - ``flush_calc``（判定同花）：被禁用的牌仍按**原始花色**参与牌型判定，只有不计分；
+          百搭牌未被禁用时算任意花色，被禁用后退回原始花色。
+        - 非 ``flush_calc``（小丑的花色条件等）：被禁用的牌不算任何花色。判定
+          「该不该被禁用」时必须传 ``bypass_debuff=True``，此时百搭牌算任意花色。
+
+        ``smeared``（模糊小丑）：红心↔方块、黑桃↔梅花互通，因此头目禁用某花色时
+        同组花色也一起被禁用。石头牌始终无花色。
+        """
+        if flush_calc:
+            if self.enhanced == "stone":
+                return False
+            if self.enhanced == "wild" and not self.debuffed:
+                return True
+        else:
+            if self.debuffed and not bypass_debuff:
+                return False
+            if self.enhanced == "stone":
+                return False
+            if self.enhanced == "wild":
+                return True
         if smeared:
             reds = ("H", "D")
             blacks = ("S", "C")

@@ -390,11 +390,17 @@ class Game:
             self._apply_boss_debuffs()
 
     def _apply_boss_debuffs(self):
-        """将当前头目盲注的牌面限制应用到现有手牌。"""
+        """将当前头目盲注的牌面限制应用到现有手牌。
+
+        对应 blind.lua 的 Blind:debuff_card：花色判定走 ``is_suit(suit, bypass_debuff=True)``，
+        所以模糊小丑下黑桃/梅花、红心/方块会一起被禁用，百搭牌（算任意花色）也被禁用；
+        石头牌无花色不受影响。被禁用的牌仍可打出、仍参与牌型判定，只是不计分。
+        """
         dis_suit = {"bl_club": "C", "bl_goad": "S", "bl_head": "H", "bl_window": "D"}.get(self.blind_key)
+        smeared = self.any_joker("j_smeared")
         played_ids = {id(c) for c in self.played_this_ante} if self.blind_key == "bl_pillar" else set()
         for c in self.hand:
-            if dis_suit and c.suit == dis_suit:
+            if dis_suit and c.is_suit(dis_suit, bypass_debuff=True, smeared=smeared):
                 c.debuffed = True
             if self.blind_key == "bl_plant" and c.is_face():
                 c.debuffed = True
