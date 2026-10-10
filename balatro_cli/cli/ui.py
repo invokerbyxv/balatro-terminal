@@ -199,6 +199,21 @@ def rarity_color(r: int) -> str:
     return {1: GRAY, 2: GREEN, 3: BLUE, 4: MAGENTA}.get(r, RESET)
 
 
+#: 效果文案里的概率写法（「1/4 概率」）；只认概率，不碰「10/8/6/4/2」这类点数列表
+_PROB_RE = re.compile(r"1/(\d+) 概率")
+
+
+def prob_text(game, text: str) -> str:
+    """渲染效果文案：持有六六大顺时，列出的概率分子翻倍。
+
+    对应原版把 G.GAME.probabilities 各因子 ×2 后按「分子/分母」显示，
+    因此这里显示 2/4 而不是约分后的 1/2，让玩家看得出翻倍本身。
+    """
+    if game is None or not game.any_joker("j_oops"):
+        return text
+    return _PROB_RE.sub(lambda m: f"2/{m.group(1)} 概率", text)
+
+
 def joker_line(idx: int, game, j) -> str:
     from ..data import centers as cd
     from ..core.card import EDITION_CN
@@ -228,7 +243,7 @@ def joker_line(idx: int, game, j) -> str:
             extra += f" {c('»' + live, CYAN)}"
     name = cfg["cn"]
     rarity = cd.RARITY_CN.get(cfg["rarity"], "")
-    desc = cfg["e"]
+    desc = prob_text(game, cfg["e"])
     star = "★" if j.debuffed else " "
     line = f"{idx}.{star}{c(name, rarity_color(cfg['rarity']))} {c('['+rarity+']', rarity_color(cfg['rarity']))} {c('$'+str(j.sell_value()), YELLOW)}{extra}"
     return line + f"  {c(desc, GRAY)}"
@@ -249,7 +264,7 @@ def consumable_line(idx: int, game, item) -> str:
     kind = "塔罗" if item.key in cd.TAROTS else ("星球" if item.key in cd.PLANETS else "幻灵")
     color = {"塔罗": BLUE, "星球": YELLOW, "幻灵": MAGENTA}[kind]
     name = d.get("cn", item.key)
-    eff = d.get("effect", "")
+    eff = prob_text(game, d.get("effect", ""))
     if not eff and d.get("hand"):
         eff = f"升级{HAND_CN.get(d['hand'], d['hand'])}"
     extra = ""

@@ -304,7 +304,7 @@ class App:
         name = b["cn"]
         if g.blind_on_deck == "Boss":
             name = f"★{name}★"
-        self._banner(f"第 {g.ante} 底注 · {name}", b.get("effect", ""))
+        self._banner(f"第 {g.ante} 底注 · {name}", ui.prob_text(g, b.get("effect", "")))
 
     def _menu(self) -> bool:
         ui.clear_screen()
@@ -384,7 +384,7 @@ class App:
             mult = {"Small": "", "Big": " · 奖励 $4", "Boss": " · 奖励 $5"}[g.blind_on_deck]
             if g.blind_on_deck == "Boss":
                 boss = blind_data.get_blind_cfg(g.boss_key)
-                print(f"  {ui.c('1', ui.CYAN)} 迎战  ★{boss['cn']}★  （目标 {ui.c(str(g.current_blind_chips()), ui.YELLOW)} · {boss['effect']}）")
+                print(f"  {ui.c('1', ui.CYAN)} 迎战  ★{boss['cn']}★  （目标 {ui.c(str(g.current_blind_chips()), ui.YELLOW)} · {ui.prob_text(g, boss['effect'])}）")
             else:
                 print(f"  {ui.c('1', ui.CYAN)} 迎战 {label}  （目标 {ui.c(str(g.current_blind_chips()), ui.YELLOW)}{mult}）")
             print(f"  {ui.c('2', ui.CYAN)} {skip_line}")
@@ -927,7 +927,7 @@ class App:
             print(f"  {ui.c('— ' + centers_data.RARITY_CN[r] + ' —', ui.rarity_color(r))}")
             for k in items:
                 d = centers_data.JOKERS[k]
-                print(f"    {ui.c(d['cn'], ui.rarity_color(r))}  {ui.c('$' + str(d['c']), ui.YELLOW)}  {ui.c(d['e'], ui.GRAY)}")
+                print(f"    {ui.c(d['cn'], ui.rarity_color(r))}  {ui.c('$' + str(d['c']), ui.YELLOW)}  {ui.c(ui.prob_text(self.game, d['e']), ui.GRAY)}")
         print()
         input("  [回车返回收藏]")
         self.state = "collection"
@@ -938,7 +938,7 @@ class App:
         ui.clear_screen()
         self._banner(f"{kind}图鉴", "")
         for k, d in pool.items():
-            print(f"  {ui.BOLD}{d['cn']}{ui.RESET}  {ui.c('$' + str(d['cost']), ui.YELLOW)}  {ui.c(d.get('effect', ''), ui.GRAY)}")
+            print(f"  {ui.BOLD}{d['cn']}{ui.RESET}  {ui.c('$' + str(d['cost']), ui.YELLOW)}  {ui.c(ui.prob_text(self.game, d.get('effect', '')), ui.GRAY)}")
         print()
         input("  [回车返回收藏]")
         self.state = "collection"
