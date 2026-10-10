@@ -276,7 +276,13 @@ class Game:
 
     def current_blind_chips(self) -> int:
         """当前（或待选）盲注的得分门槛。"""
-        return blind_data.blind_chips(self.current_blind_key(), self.ante, self.ante_scaling)
+        key = self.current_blind_key()
+        if self.boss_disabled():
+            # 墙 / 紫瓶的门槛倍率本身就是它的效果，禁用后按原版除回基础值
+            # （blind.lua Blind:disable 的 self.chips = self.chips/2、/3）
+            mult = 1.0 if key in ("bl_wall", "bl_final_vessel") else blind_data.get_blind_cfg(key)["mult"]
+            return int(blind_data.get_blind_amount(self.ante, self.ante_scaling) * mult)
+        return blind_data.blind_chips(key, self.ante, self.ante_scaling)
 
     def round_counts(self, blind_key: Optional[str] = None) -> tuple[int, int]:
         """本回合的出牌 / 弃牌次数（含牌组与优惠券加成、头目限制）。
@@ -288,6 +294,8 @@ class Game:
         cfg = deck_data.DECKS[self.deck_key]["config"] if self.deck_key else {}
         hands = max(1, START_PARAMS["hands"] + cfg.get("hands", 0)) + self._voucher_bonus("hands")
         discards = max(0, START_PARAMS["discards"] + cfg.get("discards", 0)) + self._voucher_bonus("discards")
+        if self.boss_disabled():
+            return hands, discards
         if key == "bl_needle":
             hands = 1
         if key == "bl_water":
@@ -301,7 +309,7 @@ class Game:
         cfg = deck_data.DECKS[self.deck_key]["config"] if self.deck_key else {}
         n = START_PARAMS["hand_size"] + cfg.get("hand_size", 0) + self._voucher_bonus("hand_size")
         n += joker_hand_size_bonus(self)
-        if key == "bl_manacle":
+        if key == "bl_manacle" and not self.boss_disabled():
             n -= 1
         return max(1, n)
 
@@ -340,6 +348,7 @@ class Game:
     def skip_blind(self) -> bool:
         """跳过当前盲注。返回 True 表示本底注结束（应进入商店）。"""
         self.skips += 1
+        self.boss_disabled_round = False      # 被跳过的盲注不再吃摔跤手的禁用
         self.say("跳过了盲注")
         tag_key = self.blind_tag_key(self.blind_on_deck) or self.next_tag_key()
         if tag_key:
@@ -369,7 +378,9 @@ class Game:
         self.hands_played_round = 0
         self.last_hand_name = None
         self.discards_used_round = 0
-        self.boss_disabled_round = False
+        # boss_disabled_round 不在这里清：CLI 的商店在选盲注之前（与原版一致，
+        # 商店与盲注选择同屏），在商店里卖掉摔跤手要作用到紧接着迎战的这个盲注，
+        # 所以标志由 end_round / skip_blind 在回合结束时清掉。
         self.blind_prepped = False
         self.pending_consumable = None
         # 小丑选盲注触发 + 每轮轮换目标
@@ -612,6 +623,33 @@ class Game:
         """头目盲注效果是否被禁用（奇科特 / 出售摔跤手）。"""
         return self.any_joker("j_chicot") or self.boss_disabled_round
 
+    def disable_current_blind(self) -> bool:
+        """当场禁用当前盲注的效果（对应 blind.lua 的 Blind:disable）。
+
+        光置标志不够：选盲注时已经施加过的效果要立刻撤销——牌面 debuff、手牌上限、
+        出牌 / 弃牌次数、背面朝下的牌。返回 False 表示本来就没有可禁用的效果。
+        """
+        if self.boss_disabled():
+            return False
+        self.boss_disabled_round = True
+        # Blind:debuff_card 在 disabled 时把 debuffed 复位；Wheel/House/Mark/Fish 翻回正面
+        for c in self.hand + self.play:
+            c.debuffed = False
+            c.face_down = False
+        key = self.current_blind_key()
+        if self.blind_key:
+            # 已经用掉的次数不回退，只把头目扣掉的那部分补回来（对应 ease_hands_played(hands_sub)
+            # / ease_discard(discards_sub)）。此时 round_counts 走的是「已禁用」分支，即未扣减值。
+            full_hands, full_discards = self.round_counts(key)
+            if key == "bl_needle":
+                self.hands_left += full_hands - 1
+            if key == "bl_water":
+                self.discards_left += full_discards
+            if key == "bl_manacle":
+                self.hand_size += 1
+                self._draw_to_hand()      # 原版 G.hand:change_size(1) 后补抽 1 张
+        return True
+
     def notify_destroyed(self, card: Card):
         """牌被销毁时通知（卡尼奥等），并阻止它在回合结束时回收到牌组。"""
         self._destroyed_ids.add(id(card))
@@ -672,10 +710,12 @@ class Game:
             self._round_income(boss_beaten=boss_beaten, blind_key=completed_blind_key)
             from .effects import on_end_round
             on_end_round(self, boss_beaten=boss_beaten)
+            self.boss_disabled_round = False      # 摔跤手的禁用只作用于本回合
             self._recycle_round_cards()
             return True
         self.run_lost = True
         self.say("未能达到盲注目标，游戏结束。")
+        self.boss_disabled_round = False
         self._recycle_round_cards()
         return False
 
@@ -1147,11 +1187,10 @@ class Game:
             self.dollars += j.sell_value()
             self.jokers.pop(index)
             if j.key == "j_luchador":
-                self.boss_disabled_round = True
-                # 对应 Blind:disable：头目效果被禁用后，手牌里背面朝下的牌翻回正面
-                for c in self.hand:
-                    c.face_down = False
-                self.say("摔跤手：禁用当前头目盲注效果")
+                if self.disable_current_blind():
+                    self.say("摔跤手：禁用当前头目盲注效果")
+                else:
+                    self.say("摔跤手：当前没有可禁用的盲注效果")
             self.say("售出小丑牌")
             return True
         return False

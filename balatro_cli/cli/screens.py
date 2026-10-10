@@ -304,7 +304,10 @@ class App:
         name = b["cn"]
         if g.blind_on_deck == "Boss":
             name = f"★{name}★"
-        self._banner(f"第 {g.ante} 底注 · {name}", ui.prob_text(g, b.get("effect", "")))
+        effect = ui.prob_text(g, b.get("effect", ""))
+        if g.boss_disabled():
+            effect = f"{effect} · {ui.c('已禁用', ui.GREEN)}"
+        self._banner(f"第 {g.ante} 底注 · {name}", effect)
 
     def _menu(self) -> bool:
         ui.clear_screen()
@@ -384,7 +387,10 @@ class App:
             mult = {"Small": "", "Big": " · 奖励 $4", "Boss": " · 奖励 $5"}[g.blind_on_deck]
             if g.blind_on_deck == "Boss":
                 boss = blind_data.get_blind_cfg(g.boss_key)
-                print(f"  {ui.c('1', ui.CYAN)} 迎战  ★{boss['cn']}★  （目标 {ui.c(str(g.current_blind_chips()), ui.YELLOW)} · {ui.prob_text(g, boss['effect'])}）")
+                effect = ui.prob_text(g, boss["effect"])
+                if g.boss_disabled():
+                    effect = f"{effect} · {ui.c('已禁用', ui.GREEN)}"
+                print(f"  {ui.c('1', ui.CYAN)} 迎战  ★{boss['cn']}★  （目标 {ui.c(str(g.current_blind_chips()), ui.YELLOW)} · {effect}）")
             else:
                 print(f"  {ui.c('1', ui.CYAN)} 迎战 {label}  （目标 {ui.c(str(g.current_blind_chips()), ui.YELLOW)}{mult}）")
             print(f"  {ui.c('2', ui.CYAN)} {skip_line}")

@@ -8,6 +8,7 @@ from .hand_eval import HAND_ORDER, HAND_CN, evaluate_poker_hand
 from ..data import centers as centers_data
 from ..data import consumables as consumable_data
 from ..data import tags as tag_data
+from ..data import blinds as blind_data
 
 
 def joker_cn(key: str) -> str:
@@ -920,6 +921,12 @@ def joker_live_effect(game, j) -> str:
         return f"{r}{SUIT_CN.get(s, s)}"
     if k == "j_mail":
         return f"目标{stat.get('rank', 'A')}"
+
+    # 对应原版卡面的 ACTIVE / NO BOSS ACTIVE
+    if k == "j_luchador":
+        if game.boss_disabled():
+            return "已禁用当前盲注"
+        return "可禁用" if game.current_blind_key() in blind_data.BOSS_BLINDS else "无头目生效"
 
     # ---- 随局实时 +筹码 / +倍率 ----
     if k == "j_blue_joker":
