@@ -439,6 +439,15 @@ class Game:
         """刚抽到手牌的牌是否保持背面朝下（对应 blind.lua 的 Blind:stay_flipped）。"""
         if self.boss_disabled():
             return False
+        from .effects import is_face_card, roll_prob
+        if self.blind_key == "bl_wheel":
+            return roll_prob(self, 7, "wheel")
+        if self.blind_key == "bl_house" and self.hands_played_round == 0 and self.discards_used_round == 0:
+            # 房子：第一手牌（出牌且未弃牌前抽到的牌）背面朝下
+            return True
+        if self.blind_key == "bl_mark":
+            # 记号：所有人头牌（J/Q/K）背面朝下；幻视把全部牌视为人头牌时同样生效
+            return is_face_card(card, self)
         if self.blind_key == "bl_fish" and self.blind_prepped:
             return True
         return False

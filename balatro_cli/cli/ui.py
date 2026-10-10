@@ -165,7 +165,7 @@ SUIT_COLOR = {"S": "CYAN", "H": "RED", "C": "GREEN", "D": "YELLOW"}
 def render_card(card, selected: bool = False, colorized: bool = True) -> str:
     from ..core.card import SUIT_DISPLAY, ENHANCED_CN, EDITION_CN, SEAL_CN
     if card.face_down:
-        # 背面朝下的牌（鱼头目）牌面不可见，只显示 ?；仍可照常选中打出
+        # 背面朝下的牌（鱼、记号等头目）牌面不可见，只显示 ?；仍可照常选中打出
         core = c("?", GRAY)
         return f"[{BOLD}{core}{RESET}]" if selected else f" {core} "
     s = f"{SUIT_DISPLAY[card.suit]}{card.rank}"
