@@ -25,6 +25,9 @@ START_PARAMS = {
 
 WIN_ANTE = 8
 
+#: 出牌 / 弃牌一次最多 5 张（对应 Lua 的 play/discard 区上限，牌型判定也以此为限）
+MAX_PLAY_SIZE = 5
+
 #: 离开商店时保留的标签：它们的效果要等到后续事件才触发（双重标签等下一个标签、
 #: 版本标签等下一张商店小丑），原版会一直留在收藏里；其余标签进商店即已生效。
 PERSISTENT_TAGS = {"tag_double", "tag_foil", "tag_holo", "tag_polychrome", "tag_negative"}
@@ -458,9 +461,19 @@ class Game:
     # ------------------------------------------------------------------
     # 出牌 / 弃牌
     # ------------------------------------------------------------------
-    def toggle_select(self, index: int):
-        if 0 <= index < len(self.hand):
-            self.hand[index].selected = not getattr(self.hand[index], "selected", False)
+    def toggle_select(self, index: int, limit: Optional[int] = MAX_PLAY_SIZE) -> bool:
+        """切换选中状态；选中数已达 ``limit`` 时拒绝新增并返回 False。
+
+        ``limit=None`` 表示不限（消耗牌选目标等场景自行判断）。
+        """
+        if not (0 <= index < len(self.hand)):
+            return False
+        card = self.hand[index]
+        if not getattr(card, "selected", False) and limit is not None \
+                and len(self.selected_cards()) >= limit:
+            return False
+        card.selected = not getattr(card, "selected", False)
+        return True
 
     def clear_selection(self):
         for c in self.hand:
@@ -502,6 +515,9 @@ class Game:
         if not played:
             self.say("请先选择要打出的牌")
             return []
+        if len(played) > MAX_PLAY_SIZE:
+            self.say(f"一次最多打出 {MAX_PLAY_SIZE} 张牌（当前选了 {len(played)} 张）")
+            return []
         for c in played:
             c.selected = False
         for c in played:
@@ -537,6 +553,9 @@ class Game:
         selected = self.selected_cards()
         if not selected:
             self.say("请先选择要弃掉的牌")
+            return False
+        if len(selected) > MAX_PLAY_SIZE:
+            self.say(f"一次最多弃掉 {MAX_PLAY_SIZE} 张牌（当前选了 {len(selected)} 张）")
             return False
         if self.discards_left <= 0:
             self.say("本回合没有剩余弃牌次数")

@@ -3,7 +3,7 @@ from typing import List, Optional, Tuple
 
 from . import ui
 from . import terminal
-from ..core.game import Game
+from ..core.game import Game, MAX_PLAY_SIZE
 from ..core.card import Card
 from ..core.items import JokerItem
 from ..core.scoring import blocked_play_reason
@@ -437,10 +437,12 @@ class App:
         self._items_line(clickable=True)
         self._show_log()
         print(f"  选牌：点击卡片或输入序号（如 {ui.c('1 2 3', ui.CYAN)} / {ui.c('1-3', ui.CYAN)}），"
-              f"重复输入取消；{ui.c('o 1 2', ui.CYAN)} 换位")
+              f"重复输入取消；一次最多 {ui.c(str(MAX_PLAY_SIZE), ui.CYAN)} 张"
+              f"（已选 {ui.c(str(len(g.selected_cards())), ui.CYAN)}）；"
+              f"{ui.c('o 1 2', ui.CYAN)} 换位")
         self._button_line([("打出", "p"), ("弃牌", "d"), ("消耗", "u"), ("售卖", "s"),
                            ("信息", "i"), ("排序", "o"), ("手动", "ou"), ("退出", "q")])
-        cmd = ui.prompt(regions=self.regions, on_click=g.toggle_select)
+        cmd = ui.prompt(regions=self.regions, on_click=self._click_select)
         if cmd == ui.REDRAW:
             return
         if cmd in ("p", ""):
@@ -487,10 +489,18 @@ class App:
         if reason:
             print(f"  {ui.c('⚠ ' + reason + '，本手打出将不计分', ui.RED)}")
 
-    def _toggle_cards(self, cmd: str):
+    def _toggle_cards(self, cmd: str, limit: Optional[int] = MAX_PLAY_SIZE):
         g = self.game
         for i in sorted(self._parse_indices(cmd, len(g.hand))):
-            g.toggle_select(i)
+            self._click_select(i, limit)
+
+    def _click_select(self, index: int, limit: Optional[int] = MAX_PLAY_SIZE):
+        """选中一张牌；超出出牌/弃牌上限时不生效，提示进实时消息（下次重绘显示）。"""
+        if self.game.toggle_select(index, limit):
+            return
+        hint = f"一次最多选择 {limit} 张牌"
+        if hint not in self.log:
+            self._push_log([hint])
 
     def _parse_indices(self, spec: str, limit: int) -> set[int]:
         idxs: set[int] = set()
@@ -833,8 +843,10 @@ class App:
                      f"需选择 {self.target_min}-{self.target_needed} 张")
         self._hand_line(clickable=True)
         print(f"  点击卡片或输入序号（如 {ui.c('1 2 3', ui.CYAN)} 或 {ui.c('1-3', ui.CYAN)}），重复输入可取消")
+        self._show_log()
         self._button_line([("确认", "0"), ("取消", "q")])
-        cmd = ui.prompt(regions=self.regions, on_click=g.toggle_select)
+        cmd = ui.prompt(regions=self.regions,
+                        on_click=lambda i: self._click_select(i, self.target_needed))
         if cmd == ui.REDRAW:
             return
         if cmd == "0":
@@ -860,7 +872,7 @@ class App:
             g.pending_consumable = None
             self.state = self.target_return
         else:
-            self._toggle_cards(cmd)
+            self._toggle_cards(cmd, self.target_needed)
 
     def _over(self) -> bool:
         g = self.game
