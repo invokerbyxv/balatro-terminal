@@ -23,6 +23,8 @@ START_PARAMS = {
     "ante_scaling": 1,
 }
 
+#: 通关判定线（对应 G.GAME.win_ante）。无尽模式没有回合上限：通关只是在这里宣布，
+#: 之后底注照常推进，决战头目仍在 WIN_ANTE 的倍数底注出现。
 WIN_ANTE = 8
 
 #: 出牌 / 弃牌一次最多 5 张（对应 Lua 的 play/discard 区上限，牌型判定也以此为限）
@@ -73,9 +75,14 @@ class Game:
 
         # 进度
         self.ante = 1
+        self.round = 0                     # 回合计数（对应 G.GAME.round）
         self.chips = 0
         self.run_won = False
         self.run_lost = False
+        #: 通关后是否进入无尽模式。原版没有回合上限：第 8 底注通关后关闭通关窗口
+        #: （UI_definitions.lua create_UIBox_win 的「Endless Mode」按钮）即继续，
+        #: 只有失败或退出才会停；通关只宣布一次，之后回合文本变为「无尽回合」。
+        self.endless = False
         self.blind_key: Optional[str] = None       # 当前迎战的盲注
         self.blind_status = {"Small": "Select", "Big": "Upcoming", "Boss": "Upcoming"}
         self.blind_on_deck = "Small"
@@ -254,7 +261,9 @@ class Game:
                     candidates.append(key)
             else:
                 if self.ante % WIN_ANTE != 0 or self.ante < 2:
-                    if d["min"] <= self.ante <= d["max"]:
+                    # 对应 common_events.lua 2353：判定只看 min，max 不参与（数据里的
+                    # max 是图鉴/排布用的）——否则无尽模式过了第 10 底注就没有普通头目可选
+                    if d["min"] <= self.ante:
                         candidates.append(key)
         if not candidates:
             candidates = [k for k, d in BOSS_BLINDS.items() if not d.get("showdown")]
@@ -370,6 +379,9 @@ class Game:
     def select_blind(self):
         key = {"Small": "bl_small", "Big": "bl_big", "Boss": self.boss_key}[self.blind_on_deck]
         self.blind_key = key
+        # 对应 button_callbacks.lua 2533 ease_round(1)：只有迎战盲注才推进回合数，
+        # 跳过盲注拿标签不算一个回合。
+        self.round += 1
         self.chips = 0
         # 注意：played_this_ante 在整个底注内累积（柱头 boss），在 reset_blinds（新底注）时清空
         self.round_hand_played = []
@@ -667,6 +679,27 @@ class Game:
         return self.hands_left > 0 and len(self.hand) > 0
 
     # ------------------------------------------------------------------
+    # 无尽模式
+    # ------------------------------------------------------------------
+    def round_label(self) -> str:
+        """回合文本（对应 G.GAME.current_round.round_text）：通关后为「无尽回合」。"""
+        return f"无尽回合 {self.round}" if self.endless else f"回合 {self.round}"
+
+    def enter_endless(self) -> bool:
+        """通关后选择继续 —— 进入无尽模式，没有回合上限。
+
+        对应原版通关窗口的「Endless Mode」按钮（UI_definitions.lua 2785，即关闭
+        通关窗口）：第 8 底注的头目被击败即通关，之后底注照常推进、决战头目照常在
+        8 的倍数底注出现，通关不再重复宣布，失败只结束无尽模式而不计为失败。
+        """
+        if not self.run_won or self.endless:
+            return False
+        self.endless = True
+        self.say("进入无尽模式（没有回合上限）")
+        self._advance_ante()
+        return True
+
+    # ------------------------------------------------------------------
     # 回合结束
     # ------------------------------------------------------------------
     def round_over(self) -> bool:
@@ -682,7 +715,8 @@ class Game:
     def end_round(self) -> bool:
         """结算回合。返回 True=胜利推进，False=游戏结束。"""
         completed_blind_key = self.blind_key
-        if completed_blind_key is None or self.run_won or self.run_lost:
+        # 通关后若进入无尽模式，回合仍要照常结算
+        if completed_blind_key is None or self.run_lost or (self.run_won and not self.endless):
             self.say("当前没有需要结算的回合")
             return False
         won = self.chips >= self.current_blind_chips()
@@ -714,22 +748,26 @@ class Game:
             self._recycle_round_cards()
             return True
         self.run_lost = True
-        self.say("未能达到盲注目标，游戏结束。")
+        self.say("未能达到盲注目标，" + ("无尽模式结束。" if self.endless else "游戏结束。"))
         self.boss_disabled_round = False
         self._recycle_round_cards()
         return False
 
     def _boss_beaten(self, skipped: bool = False):
-        if self.ante == WIN_ANTE:
-            self.run_won = True
-            self.say("你击败了第 8 底注的头目！通关！")
-            return
         if not skipped:
             self.bosses_used.append(self.boss_key or "")
             # 浮雕牌组：击败头目盲注后获得一个双重标签（back.lua trigger_effect / eval）。
             # 跳过头目不触发（原版在打出手牌结算时触发），故放在 skipped 分支里。
             if self.deck_key == "b_anaglyph":
                 self.add_tag("tag_double")
+        if self.ante == WIN_ANTE and not self.endless:
+            # 通关只宣布一次：此时底注停在第 8 底注，等玩家决定是否进入无尽模式
+            self.run_won = True
+            self.say(f"你击败了第 {WIN_ANTE} 底注的头目！通关！")
+            return
+        self._advance_ante()
+
+    def _advance_ante(self):
         self.ante += 1
         self.boss_key = self._get_new_boss()
         self.reset_blinds()

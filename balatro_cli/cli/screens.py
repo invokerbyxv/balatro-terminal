@@ -3,7 +3,7 @@ from typing import List, Optional, Tuple
 
 from . import ui
 from . import terminal
-from ..core.game import Game, MAX_PLAY_SIZE
+from ..core.game import Game, MAX_PLAY_SIZE, WIN_ANTE
 from ..core.card import Card
 from ..core.items import JokerItem
 from ..core.scoring import blocked_play_reason
@@ -202,7 +202,7 @@ class App:
         name = g.blind_cn(key)
         if key == g.boss_key:
             name = f"★{name}★"
-        self._banner("局面信息", f"第 {g.ante} 底注 · {name}")
+        self._banner("局面信息", f"{self._ante_label()} · {name} · {g.round_label()}")
         target = g.current_blind_chips()
         if g.blind_key is None:
             # 选盲注 / 商店阶段：chips 还是上一回合的旧值
@@ -296,7 +296,14 @@ class App:
         pct = g.chips / target * 100 if target else 0
         print(f"目标 {ui.c(str(target), ui.YELLOW)}   得分 {ui.c(str(g.chips), ui.GREEN)} ({pct:.0f}%)    "
               f"金钱 {ui.c('$' + str(g.dollars), ui.YELLOW)}   出牌 {ui.c(str(g.hands_left), ui.GREEN)}    "
-              f"弃牌 {ui.c(str(g.discards_left), ui.GREEN)}   牌组 {g.deck.count()}")
+              f"弃牌 {ui.c(str(g.discards_left), ui.GREEN)}   牌组 {g.deck.count()}   {g.round_label()}")
+
+    def _ante_label(self) -> str:
+        """底注标签：未通关时按 HUD 的写法显示「第 X 底注 / 8」，无尽模式标「无尽」。"""
+        g = self.game
+        if g.endless:
+            return f"第 {g.ante} 底注" + ui.c("（无尽）", ui.BLUE)
+        return f"第 {g.ante} 底注 / {WIN_ANTE}"
 
     def _blind_meta(self):
         g = self.game
@@ -307,7 +314,7 @@ class App:
         effect = ui.prob_text(g, b.get("effect", ""))
         if g.boss_disabled():
             effect = f"{effect} · {ui.c('已禁用', ui.GREEN)}"
-        self._banner(f"第 {g.ante} 底注 · {name}", effect)
+        self._banner(f"{self._ante_label()} · {name}", f"{g.round_label()} · {effect}")
 
     def _menu(self) -> bool:
         ui.clear_screen()
@@ -370,7 +377,7 @@ class App:
 
     def _blind_select(self):
         g = self.game
-        self._banner(f"第 {g.ante} 底注 · 选择盲注", "跳过可获得标签")
+        self._banner(f"{self._ante_label()} · 选择盲注", "跳过可获得标签")
         # 预览跳过后会获得的标签（reset_blinds 已预生成，所见即所得）
         tag_key = g.blind_tag_key(g.blind_on_deck)
         if tag_key:
@@ -409,10 +416,8 @@ class App:
             self._push_log(g.messages)
             g.messages.clear()
             # 跳过头目则本底注结束，进入商店；跳过最终头目则通关
-            if g.run_won:
-                print(f"  {ui.c(ui.BOLD + '★★★ 你通关了！ ★★★', ui.YELLOW)}")
-                input("  [回车进入结算商店]")
-                self._enter_shop()
+            if g.run_won and not g.endless:
+                self._win_screen()
             elif g.ante > ante_before:
                 self._enter_shop()
             else:
@@ -654,20 +659,41 @@ class App:
     # ==========================================================
     def _settle(self):
         g = self.game
-        self._banner("回合结算", "")
+        self._banner("回合结算", g.round_label())
         won = g.end_round()
         self._push_log(g.messages)
         g.messages.clear()
         self._show_log()
         print()
-        if g.run_won:
-            print(f"  {ui.c(ui.BOLD + '★★★ 你通关了！ ★★★', ui.YELLOW)}")
-            input("  [回车进入结算商店]")
-            self._enter_shop()
+        if g.run_won and not g.endless:
+            self._win_screen()
             return
         if g.run_lost:
             self.state = "over"
             return
+        self._enter_shop()
+
+    def _win_screen(self):
+        """通关窗口（对应原版 UI_definitions.lua create_UIBox_win）。
+
+        原版的「Endless Mode」按钮就是关闭通关窗口的按钮——关掉即继续游戏，
+        没有回合上限；这里把「继续」与「结束」两个选择显式分开。
+        """
+        g = self.game
+        self._banner("通关！", f"第 {WIN_ANTE} 底注 · 共 {g.round} 回合")
+        print(f"  {ui.c(ui.BOLD + f'★★★ 你击败了第 {WIN_ANTE} 底注的头目！ ★★★', ui.YELLOW)}")
+        print(f"  金钱 ${g.dollars} · 跳过盲注 {g.skips} 次")
+        print(f"  {ui.c('1', ui.CYAN)} 进入无尽模式（没有回合上限，继续本局）   "
+              f"{ui.c('2', ui.CYAN)} 结束本局")
+        cmd = ui.prompt()
+        if cmd == "2" or cmd == "quit":
+            self.state = "over"
+            return
+        g.enter_endless()
+        for m in g.messages:
+            print(f"  {ui.c(m, ui.GRAY)}")
+        g.messages.clear()
+        input("  [回车进入结算商店]")
         self._enter_shop()
 
     def _enter_shop(self):
@@ -680,7 +706,7 @@ class App:
 
     def _shop(self):
         g = self.game
-        self._banner(f"商店 · 第 {g.ante} 底注", f"金钱 {ui.c('$' + str(g.dollars), ui.YELLOW)}")
+        self._banner(f"商店 · {self._ante_label()}", f"金钱 {ui.c('$' + str(g.dollars), ui.YELLOW)}")
         if g.shop_jokers:
             print("商品:")
             for i, item in enumerate(g.shop_jokers):
@@ -747,7 +773,7 @@ class App:
             g.shop_closed()
             self._push_log(g.messages)
             g.messages.clear()
-            if g.run_won:
+            if g.run_won and not g.endless:
                 self.state = "over"
             else:
                 self.state = "blind"
@@ -882,12 +908,18 @@ class App:
 
     def _over(self) -> bool:
         g = self.game
-        self._banner("游戏结束" if g.run_lost else "通关！", "")
+        title = "通关！" if not g.run_lost else ("无尽模式结束" if g.endless else "游戏结束")
+        self._banner(title, g.round_label())
         if g.run_lost:
-            print(f"  {ui.c('你止步于第 ' + str(g.ante) + ' 底注。', ui.RED)}")
+            if g.endless:
+                # 对应 game.lua 3585：通关之后的失败不计入战绩（原版结算界面在无尽模式里是蓝色）
+                print(f"  {ui.c('无尽模式止步于第 ' + str(g.ante) + ' 底注。', ui.RED)}")
+                print(f"  {ui.c(f'本局已在第 {WIN_ANTE} 底注通关，无尽模式里的失败不算失败。', ui.GRAY)}")
+            else:
+                print(f"  {ui.c('你止步于第 ' + str(g.ante) + ' 底注。', ui.RED)}")
         else:
-            print(f"  {ui.c('你击败了第 ' + str(g.ante) + ' 底注的头目！', ui.YELLOW)}")
-        print(f"  最终得分 {g.chips} · 金钱 ${g.dollars}")
+            print(f"  {ui.c(f'你击败了第 {WIN_ANTE} 底注的头目！', ui.YELLOW)}")
+        print(f"  共 {g.round} 回合 · 最终得分 {g.chips} · 金钱 ${g.dollars}")
         print(f"  {ui.c('1', ui.CYAN)} 返回主菜单   {ui.c('2', ui.CYAN)} 退出")
         cmd = ui.prompt()
         if cmd == "2" or cmd == "quit":
