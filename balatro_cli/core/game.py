@@ -1185,12 +1185,11 @@ class Game:
                 self.say("永恒小丑牌无法出售")
                 return False
             self.dollars += j.sell_value()
+            # 卖出效果必须在移除之前结算：被卖的小丑若是蓝图，它会把 selling_self
+            # 转发给自己右侧的小丑（原版 card.lua:1599 的 calculate_joker 语义）。
+            from .effects import on_sell_joker
+            on_sell_joker(self, j)
             self.jokers.pop(index)
-            if j.key == "j_luchador":
-                if self.disable_current_blind():
-                    self.say("摔跤手：禁用当前头目盲注效果")
-                else:
-                    self.say("摔跤手：当前没有可禁用的盲注效果")
             self.say("售出小丑牌")
             return True
         return False
