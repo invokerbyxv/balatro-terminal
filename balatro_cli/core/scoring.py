@@ -85,7 +85,7 @@ def card_mult_bonus(game, card: Card) -> int:
     if card.enhanced == "mult":
         m += booster_data.ENHANCED["m_mult"]["mult"]
     if card.enhanced == "lucky":
-        from .effects import roll_prob
+        from .lookup import roll_prob
         if roll_prob(game, booster_data.ENHANCED["m_lucky"]["mult_chance"], "lucky"):
             m += booster_data.ENHANCED["m_lucky"]["mult"]
             game.lucky_triggers += 1
@@ -107,7 +107,7 @@ def card_dollars_bonus(game, card: Card) -> int:
     if card.seal == "gold":
         d += 3
     if card.enhanced == "lucky":
-        from .effects import roll_prob
+        from .lookup import roll_prob
         if roll_prob(game, booster_data.ENHANCED["m_lucky"]["dollars_chance"], "lucky_money"):
             d += booster_data.ENHANCED["m_lucky"]["p_dollars"]
             game.lucky_triggers += 1
@@ -138,7 +138,8 @@ def held_card_effect(game, card: Card) -> tuple:
 # ----------------------------------------------------------------------
 def evaluate_play(game) -> List[str]:
     """结算打出的手牌。返回展示消息列表。"""
-    from .effects import calculate_joker, joker_cn
+    from .joker_fx import calculate_joker
+    from .lookup import joker_cn
     msgs: List[str] = []
     played = game.play[:]
 
