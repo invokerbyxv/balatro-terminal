@@ -293,9 +293,14 @@ class Game:
         """当前（或待选）盲注的得分门槛。"""
         key = self.current_blind_key()
         if self.boss_disabled():
-            # 墙 / 紫瓶的门槛倍率本身就是它的效果，禁用后按原版除回基础值
-            # （blind.lua Blind:disable 的 self.chips = self.chips/2、/3）
-            mult = 1.0 if key in ("bl_wall", "bl_final_vessel") else blind_data.get_blind_cfg(key)["mult"]
+            # 墙 / 紫瓶的门槛倍率本身就是它的效果。对应 blind.lua Blind:disable：
+            # 把 chips 除以倍率（墙 = mult/2，紫瓶 = mult/3），即禁用后按一半/三分之一算。
+            cfg = blind_data.get_blind_cfg(key)
+            mult = cfg["mult"]
+            if key == "bl_wall":
+                mult /= 2
+            elif key == "bl_final_vessel":
+                mult /= 3
             return int(blind_data.get_blind_amount(self.ante, self.ante_scaling) * mult)
         return blind_data.blind_chips(key, self.ante, self.ante_scaling)
 
