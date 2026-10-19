@@ -1027,187 +1027,247 @@ def use_consumable(game, item: ConsumableItem) -> str:
     return status
 
 
+# ----------------------------------------------------------------------
+# 消耗牌：无目标效果
+#
+# 每个 handler 接收 (game, item) 并返回 "done"；需要从手牌选目标的一律落到
+# needs_target，由 UI 收集目标后交给 finish_consumable_target。
+# 移除 item 的时机刻意与原实现逐条保持一致：部分效果（女祭司/皇帝、
+# 愚者）在判定栏位时依赖 item 是否还在 consumeables 里。
+# ----------------------------------------------------------------------
+def _use_fool(game, item):
+    last = game.last_tarot_planet
+    if last and last != "c_fool" and last in consumable_data.ALL_CONSUMABLES:
+        info = consumable_data.ALL_CONSUMABLES[last]
+        if len(game.consumeables) < game.consumable_slots:
+            game.consumeables.append(ConsumableItem(key=last, buy_cost=info["cost"],
+                                                    sell_price=max(1, info["cost"] // 2)))
+            game.say(f"愚者：生成 {consumable_data.get_consumable_cn(last)}")
+        else:
+            game.say("愚者：消耗品栏已满")
+    else:
+        game.say("愚者：没有可复制的牌")
+    game.consumeables.remove(item)
+    return "done"
+
+
+def _use_high_priestess(game, item):
+    game.consumeables.remove(item)
+    for _ in range(2):
+        game.gain_consumable(game.rng.choice(list(consumable_data.PLANETS)))
+    game.say("女祭司：生成 2 张星球牌")
+    return "done"
+
+
+def _use_emperor(game, item):
+    game.consumeables.remove(item)
+    for _ in range(2):
+        game.gain_consumable(game.rng.choice(list(consumable_data.TAROTS)))
+    game.say("皇帝：生成 2 张塔罗牌")
+    return "done"
+
+
+def _use_hermit(game, item):
+    gain = min(game.dollars, 20)
+    game.dollars += gain
+    game.say(f"隐者：金钱翻倍 +${gain}")
+    game.consumeables.remove(item)
+    return "done"
+
+
+def _use_temperance(game, item):
+    gain = min(sum(j.sell_value() for j in game.jokers), 50)
+    game.dollars += gain
+    game.say(f"节制：+${gain}")
+    game.consumeables.remove(item)
+    return "done"
+
+
+def _use_wheel_of_fortune(game, item):
+    if not game.jokers:
+        game.say("命运之轮：没有小丑牌")
+    elif roll_prob(game, 4, "wheel"):
+        j = game.rng.choice(game.jokers)
+        j.edition = game.rng.choice(["foil", "holo", "polychrome"])
+        game.say(f"命运之轮：{joker_cn(j.key)} 获得版本 {j.edition}！")
+    else:
+        game.say("命运之轮：NOPE！")
+    game.consumeables.remove(item)
+    return "done"
+
+
+def _gain_joker_from_pack(game, jk, empty_msg, got):
+    """审判/魅影/灵魂共用：小丑栏满则提示，否则获得并播报。"""
+    if len(game.jokers) >= game.joker_slots:
+        game.say(empty_msg)
+        return
+    cfg = centers_data.joker_cfg(jk)
+    game.jokers.append(JokerItem(key=jk, buy_cost=cfg["cost"],
+                                 sell_price=max(1, cfg["cost"] // 2)))
+    game.say(got.format(cn=cfg["cn"]))
+
+
+def _use_judgement(game, item):
+    _gain_joker_from_pack(game, centers_data.random_joker_key(game),
+                          "审判：小丑栏已满", "审判：获得小丑 {cn}")
+    game.consumeables.remove(item)
+    return "done"
+
+
+def _use_wraith(game, item):
+    _gain_joker_from_pack(game, centers_data.random_joker_key(game, rarity=3),
+                          "魅影：小丑栏已满", "魅影：获得稀有小丑 {cn}")
+    game.dollars = 0
+    game.consumeables.remove(item)
+    return "done"
+
+
+def _use_soul(game, item):
+    _gain_joker_from_pack(game, centers_data.random_joker_key(game, rarity=4),
+                          "灵魂：小丑栏已满", "灵魂：获得传说小丑 {cn}！")
+    game.consumeables.remove(item)
+    return "done"
+
+
+def _use_immolate(game, item):
+    n = min(5, len(game.hand))
+    for c in game.rng.sample(game.hand, n):
+        game.hand.remove(c)
+        game.notify_destroyed(c)
+    game.dollars += 20
+    game.say(f"献祭：销毁 {n} 张手牌，+$20")
+    game.consumeables.remove(item)
+    return "done"
+
+
+def _use_black_hole(game, item):
+    for h in game.hand_levels:
+        game.hand_levels[h] += 1
+    game.say("黑洞：所有手牌类型等级 +1")
+    game.consumeables.remove(item)
+    return "done"
+
+
+def _summon_hand(game, count, msg, **card_kwargs):
+    """眷属/阴森/咒文共用：先销毁 1 张随机手牌，再生成 count 张随机牌。"""
+    _destroy_random_hand(game, 1)
+    for _ in range(count):
+        game.hand.append(_random_card(game, **card_kwargs))
+    game.sort_hand()
+    game.say(msg)
+
+
+def _use_familiar(game, item):
+    _summon_hand(game, 3, "眷属：销毁 1 张手牌，生成 3 张人头", face=True)
+    game.consumeables.remove(item)
+    return "done"
+
+
+def _use_grim(game, item):
+    _summon_hand(game, 2, "阴森：销毁 1 张手牌，生成 2 张增强 A",
+                 rank="A", enhanced="bonus")
+    game.consumeables.remove(item)
+    return "done"
+
+
+def _use_incantation(game, item):
+    _summon_hand(game, 4, "咒文：销毁 1 张手牌，生成 4 张增强数字牌",
+                 number=True, enhanced="bonus")
+    game.consumeables.remove(item)
+    return "done"
+
+
+def _use_sigil(game, item):
+    suit = game.rng.choice(SUITS)
+    for c in game.hand:
+        c.suit = suit
+    game.sort_hand()
+    game.say(f"纹章：所有手牌变成 {suit}")
+    game.consumeables.remove(item)
+    return "done"
+
+
+def _use_ouija(game, item):
+    rank = game.rng.choice(RANKS)
+    for c in game.hand:
+        c.rank = rank
+    game.change_hand_size(-1)
+    game.say(f"灵应盘：所有手牌变成 {rank}，手牌上限 -1")
+    game.consumeables.remove(item)
+    return "done"
+
+
+def _use_ectoplasm(game, item):
+    if game.jokers:
+        j = game.rng.choice(game.jokers)
+        j.edition = "negative"
+        game.say(f"灵质：{joker_cn(j.key)} 获得负片版本")
+    game.change_hand_size(-1)
+    game.say("灵质：手牌上限 -1")
+    game.consumeables.remove(item)
+    return "done"
+
+
+def _use_ankh(game, item):
+    if game.jokers:
+        keep = game.rng.choice(game.jokers)
+        for v in list(game.jokers):
+            if v is not keep and not v.eternal:
+                game.jokers.remove(v)
+        if len(game.jokers) < game.joker_slots or keep.negative:
+            game.jokers.append(JokerItem(key=keep.key, edition=keep.edition,
+                                         sell_price=keep.sell_price, buy_cost=keep.buy_cost,
+                                         stat=dict(keep.stat)))
+        game.say("安卡：销毁其他小丑，复制 1 张")
+    game.consumeables.remove(item)
+    return "done"
+
+
+def _use_hex(game, item):
+    if game.jokers:
+        j = game.rng.choice(game.jokers)
+        j.edition = "polychrome"
+        game.say(f"诅咒：{joker_cn(j.key)} 获得彩绘版本")
+        for v in list(game.jokers):
+            if v is not j and not v.eternal:
+                game.jokers.remove(v)
+    game.consumeables.remove(item)
+    return "done"
+
+
+#: 无目标消耗牌 key -> handler。不在表里的走 needs_target（需要选手牌目标）。
+_NO_TARGET_CONSUMABLES = {
+    "c_fool": _use_fool,
+    "c_high_priestess": _use_high_priestess,
+    "c_emperor": _use_emperor,
+    "c_hermit": _use_hermit,
+    "c_temperance": _use_temperance,
+    "c_wheel_of_fortune": _use_wheel_of_fortune,
+    "c_judgement": _use_judgement,
+    "c_wraith": _use_wraith,
+    "c_soul": _use_soul,
+    "c_immolate": _use_immolate,
+    "c_black_hole": _use_black_hole,
+    "c_familiar": _use_familiar,
+    "c_grim": _use_grim,
+    "c_incantation": _use_incantation,
+    "c_sigil": _use_sigil,
+    "c_ouija": _use_ouija,
+    "c_ectoplasm": _use_ectoplasm,
+    "c_ankh": _use_ankh,
+    "c_hex": _use_hex,
+}
+
+
 def _apply_consumable(game, item: ConsumableItem) -> str:
     key = item.key
     if key in consumable_data.PLANETS:
         _add_planet(game, key)
         game.consumeables.remove(item)
         return "done"
-
-    # ---- 塔罗牌（无目标）----
-    if key == "c_fool":
-        last = game.last_tarot_planet
-        if last and last != "c_fool" and last in consumable_data.ALL_CONSUMABLES:
-            info = consumable_data.ALL_CONSUMABLES[last]
-            if len(game.consumeables) < game.consumable_slots:
-                game.consumeables.append(ConsumableItem(key=last, buy_cost=info["cost"],
-                                                        sell_price=max(1, info["cost"] // 2)))
-                game.say(f"愚者：生成 {consumable_data.get_consumable_cn(last)}")
-            else:
-                game.say("愚者：消耗品栏已满")
-        else:
-            game.say("愚者：没有可复制的牌")
-        game.consumeables.remove(item)
-        return "done"
-    if key == "c_high_priestess":
-        game.consumeables.remove(item)
-        for _ in range(2):
-            pk = game.rng.choice(list(consumable_data.PLANETS))
-            game.gain_consumable(pk)
-        game.say("女祭司：生成 2 张星球牌")
-        return "done"
-    if key == "c_emperor":
-        game.consumeables.remove(item)
-        for _ in range(2):
-            tk = game.rng.choice(list(consumable_data.TAROTS))
-            game.gain_consumable(tk)
-        game.say("皇帝：生成 2 张塔罗牌")
-        return "done"
-    if key == "c_hermit":
-        gain = min(game.dollars, 20)
-        game.dollars += gain
-        game.say(f"隐者：金钱翻倍 +${gain}")
-        game.consumeables.remove(item)
-        return "done"
-    if key == "c_temperance":
-        total = sum(j.sell_value() for j in game.jokers)
-        gain = min(total, 50)
-        game.dollars += gain
-        game.say(f"节制：+${gain}")
-        game.consumeables.remove(item)
-        return "done"
-    if key == "c_wheel_of_fortune":
-        if not game.jokers:
-            game.say("命运之轮：没有小丑牌")
-        elif roll_prob(game, 4, "wheel"):
-            j = game.rng.choice(game.jokers)
-            j.edition = game.rng.choice(["foil", "holo", "polychrome"])
-            game.say(f"命运之轮：{joker_cn(j.key)} 获得版本 {j.edition}！")
-        else:
-            game.say("命运之轮：NOPE！")
-        game.consumeables.remove(item)
-        return "done"
-    if key == "c_judgement":
-        jk = centers_data.random_joker_key(game)
-        if len(game.jokers) >= game.joker_slots:
-            game.say("审判：小丑栏已满")
-        else:
-            cfg = centers_data.joker_cfg(jk)
-            game.jokers.append(JokerItem(key=jk, buy_cost=cfg["cost"], sell_price=max(1, cfg["cost"] // 2)))
-            game.say(f"审判：获得小丑 {cfg['cn']}")
-        game.consumeables.remove(item)
-        return "done"
-    if key == "c_wraith":
-        jk = centers_data.random_joker_key(game, rarity=3)
-        if len(game.jokers) >= game.joker_slots:
-            game.say("魅影：小丑栏已满")
-        else:
-            cfg = centers_data.joker_cfg(jk)
-            game.jokers.append(JokerItem(key=jk, buy_cost=cfg["cost"], sell_price=max(1, cfg["cost"] // 2)))
-            game.say(f"魅影：获得稀有小丑 {cfg['cn']}")
-        game.dollars = 0
-        game.consumeables.remove(item)
-        return "done"
-    if key == "c_immolate":
-        n = min(5, len(game.hand))
-        for c in game.rng.sample(game.hand, n):
-            game.hand.remove(c)
-            game.notify_destroyed(c)
-        game.dollars += 20
-        game.say(f"献祭：销毁 {n} 张手牌，+$20")
-        game.consumeables.remove(item)
-        return "done"
-    if key == "c_soul":
-        jk = centers_data.random_joker_key(game, rarity=4)
-        if len(game.jokers) >= game.joker_slots:
-            game.say("灵魂：小丑栏已满")
-        else:
-            cfg = centers_data.joker_cfg(jk)
-            game.jokers.append(JokerItem(key=jk, buy_cost=cfg["cost"], sell_price=max(1, cfg["cost"] // 2)))
-            game.say(f"灵魂：获得传说小丑 {cfg['cn']}！")
-        game.consumeables.remove(item)
-        return "done"
-    if key == "c_black_hole":
-        for h in game.hand_levels:
-            game.hand_levels[h] += 1
-        game.say("黑洞：所有手牌类型等级 +1")
-        game.consumeables.remove(item)
-        return "done"
-
-    if key == "c_familiar":
-        _destroy_random_hand(game, 1)
-        for _ in range(3):
-            game.hand.append(_random_card(game, face=True))
-        game.sort_hand()
-        game.say("眷属：销毁 1 张手牌，生成 3 张人头")
-        game.consumeables.remove(item)
-        return "done"
-    if key == "c_grim":
-        _destroy_random_hand(game, 1)
-        for _ in range(2):
-            game.hand.append(_random_card(game, rank="A", enhanced="bonus"))
-        game.sort_hand()
-        game.say("阴森：销毁 1 张手牌，生成 2 张增强 A")
-        game.consumeables.remove(item)
-        return "done"
-    if key == "c_incantation":
-        _destroy_random_hand(game, 1)
-        for _ in range(4):
-            game.hand.append(_random_card(game, number=True, enhanced="bonus"))
-        game.sort_hand()
-        game.say("咒文：销毁 1 张手牌，生成 4 张增强数字牌")
-        game.consumeables.remove(item)
-        return "done"
-    if key == "c_sigil":
-        suit = game.rng.choice(SUITS)
-        for c in game.hand:
-            c.suit = suit
-        game.sort_hand()
-        game.say(f"纹章：所有手牌变成 {suit}")
-        game.consumeables.remove(item)
-        return "done"
-    if key == "c_ouija":
-        rank = game.rng.choice(RANKS)
-        for c in game.hand:
-            c.rank = rank
-        game.change_hand_size(-1)
-        game.say(f"灵应盘：所有手牌变成 {rank}，手牌上限 -1")
-        game.consumeables.remove(item)
-        return "done"
-    if key == "c_ectoplasm":
-        if game.jokers:
-            j = game.rng.choice(game.jokers)
-            j.edition = "negative"
-            game.say(f"灵质：{joker_cn(j.key)} 获得负片版本")
-        game.change_hand_size(-1)
-        game.say("灵质：手牌上限 -1")
-        game.consumeables.remove(item)
-        return "done"
-    if key == "c_ankh":
-        if game.jokers:
-            keep = game.rng.choice(game.jokers)
-            for v in list(game.jokers):
-                if v is not keep and not v.eternal:
-                    game.jokers.remove(v)
-            if len(game.jokers) < game.joker_slots or keep.negative:
-                copy = JokerItem(key=keep.key, edition=keep.edition,
-                                 sell_price=keep.sell_price, buy_cost=keep.buy_cost,
-                                 stat=dict(keep.stat))
-                game.jokers.append(copy)
-            game.say("安卡：销毁其他小丑，复制 1 张")
-        game.consumeables.remove(item)
-        return "done"
-    if key == "c_hex":
-        if game.jokers:
-            j = game.rng.choice(game.jokers)
-            j.edition = "polychrome"
-            game.say(f"诅咒：{joker_cn(j.key)} 获得彩绘版本")
-            for v in list(game.jokers):
-                if v is not j and not v.eternal:
-                    game.jokers.remove(v)
-        game.consumeables.remove(item)
-        return "done"
-
+    handler = _NO_TARGET_CONSUMABLES.get(key)
+    if handler is not None:
+        return handler(game, item)
     game.pending_consumable = item
     return "needs_target"
 
@@ -1236,6 +1296,110 @@ def _random_card(game, face=False, number=False, rank=None, enhanced=None, seal=
     return Card(rank=r, suit=s, enhanced=enhanced, seal=sl, uid=0)
 
 
+#: 星级/生肖牌（星星/月亮/太阳/世界）共用：把目标牌变成指定花色
+_SUIT_TAROTS = {"c_star", "c_moon", "c_sun", "c_world"}
+
+_RANK_BUMP = {2: "3", 3: "4", 4: "5", 5: "6", 6: "7", 7: "8", 8: "9", 9: "10",
+              10: "J", 11: "Q", 12: "K", 13: "A", 14: "A"}
+
+
+# ----------------------------------------------------------------------
+# 消耗牌：目标效果
+#
+# 每个 handler 接收 (game, targets, info) 并返回提示文本；targets 已按
+# min/max_highlighted 截断。未登记的 key 给出「未知消耗牌」提示。
+# ----------------------------------------------------------------------
+def _target_enhance(enhanced, msg):
+    def apply(game, targets, info):
+        for c in targets:
+            c.enhanced = enhanced
+        return msg
+    return apply
+
+
+def _target_single_enhance(enhanced, msg):
+    def apply(game, targets, info):
+        if targets:
+            targets[0].enhanced = enhanced
+        return msg
+    return apply
+
+
+def _target_single_seal(seal, msg):
+    def apply(game, targets, info):
+        if targets:
+            targets[0].seal = seal
+        return msg
+    return apply
+
+
+def _target_strength(game, targets, info):
+    for c in targets:
+        c.rank = _RANK_BUMP[rank_id(c.rank)]
+    return "力量：点数 +1"
+
+
+def _target_hanged_man(game, targets, info):
+    for c in targets:
+        game.hand.remove(c)
+        game.notify_destroyed(c)
+    return f"倒吊人：销毁 {len(targets)} 张牌"
+
+
+def _target_death(game, targets, info):
+    right = targets[-1]
+    for c in targets[:-1]:
+        c.rank, c.suit, c.enhanced, c.edition, c.seal =             right.rank, right.suit, right.enhanced, right.edition, right.seal
+    return "死神：复制最右牌"
+
+
+def _target_suit(game, targets, info):
+    conv = info["suit_conv"]
+    for c in targets:
+        c.suit = conv
+    return f"{info['cn']}：变为花色 {conv}"
+
+
+def _target_aura(game, targets, info):
+    if targets:
+        targets[0].edition = game.rng.choice(["foil", "holo", "polychrome"])
+    return "灵光：附加随机版本"
+
+
+def _target_cryptid(game, targets, info):
+    if targets:
+        c = targets[0]
+        for _ in range(2):
+            game.hand.append(c.copy())
+        game.sort_hand()
+    return "神秘生物：创建 2 张副本"
+
+
+_TARGET_CONSUMABLES = {
+    "c_magician": _target_enhance("lucky", "魔术师：变为幸运牌"),
+    "c_empress": _target_enhance("mult", "女皇：变为倍率牌"),
+    "c_heirophant": _target_enhance("bonus", "教皇：变为加分牌"),
+    "c_lovers": _target_single_enhance("wild", "恋人：变为百搭牌"),
+    "c_chariot": _target_single_enhance("steel", "战车：变为钢铁牌"),
+    "c_justice": _target_single_enhance("glass", "正义：变为玻璃牌"),
+    "c_devil": _target_single_enhance("gold", "恶魔：变为黄金牌"),
+    "c_tower": _target_single_enhance("stone", "高塔：变为石头牌"),
+    "c_strength": _target_strength,
+    "c_hanged_man": _target_hanged_man,
+    "c_death": _target_death,
+    "c_star": _target_suit,
+    "c_moon": _target_suit,
+    "c_sun": _target_suit,
+    "c_world": _target_suit,
+    "c_talisman": _target_single_seal("gold", "护符：加上金色蜡封"),
+    "c_aura": _target_aura,
+    "c_deja_vu": _target_single_seal("red", "似曾相识：加上红色蜡封"),
+    "c_trance": _target_single_seal("blue", "出神：加上蓝色蜡封"),
+    "c_medium": _target_single_seal("purple", "灵媒：加上紫色蜡封"),
+    "c_cryptid": _target_cryptid,
+}
+
+
 def finish_consumable_target(game, target_cards: List[Card]) -> str:
     item = game.pending_consumable
     if item is None:
@@ -1250,81 +1414,14 @@ def finish_consumable_target(game, target_cards: List[Card]) -> str:
         game.say(f"目标数量必须为 {min_sel}-{max_sel} 张")
         return "invalid"
     targets = target_cards[:max_sel]
-    msgs = []
-    if key == "c_magician":
-        for c in targets: c.enhanced = "lucky"
-        msgs.append("魔术师：变为幸运牌")
-    elif key == "c_empress":
-        for c in targets: c.enhanced = "mult"
-        msgs.append("女皇：变为倍率牌")
-    elif key == "c_heirophant":
-        for c in targets: c.enhanced = "bonus"
-        msgs.append("教皇：变为加分牌")
-    elif key == "c_lovers":
-        if targets: targets[0].enhanced = "wild"
-        msgs.append("恋人：变为百搭牌")
-    elif key == "c_chariot":
-        if targets: targets[0].enhanced = "steel"
-        msgs.append("战车：变为钢铁牌")
-    elif key == "c_justice":
-        if targets: targets[0].enhanced = "glass"
-        msgs.append("正义：变为玻璃牌")
-    elif key == "c_strength":
-        bump = {2: "3", 3: "4", 4: "5", 5: "6", 6: "7", 7: "8", 8: "9", 9: "10",
-                10: "J", 11: "Q", 12: "K", 13: "A", 14: "A"}
-        for c in targets:
-            c.rank = bump[rank_id(c.rank)]
-        msgs.append("力量：点数 +1")
-    elif key == "c_hanged_man":
-        for c in targets:
-            game.hand.remove(c)
-            game.notify_destroyed(c)
-        msgs.append(f"倒吊人：销毁 {len(targets)} 张牌")
-    elif key == "c_death":
-        right = targets[-1]
-        for c in targets[:-1]:
-            c.rank, c.suit, c.enhanced, c.edition, c.seal = right.rank, right.suit, right.enhanced, right.edition, right.seal
-        msgs.append("死神：复制最右牌")
-    elif key == "c_devil":
-        if targets: targets[0].enhanced = "gold"
-        msgs.append("恶魔：变为黄金牌")
-    elif key == "c_tower":
-        if targets: targets[0].enhanced = "stone"
-        msgs.append("高塔：变为石头牌")
-    elif key in ("c_star", "c_moon", "c_sun", "c_world"):
-        conv = info["suit_conv"]
-        for c in targets: c.suit = conv
-        msgs.append(f"{info['cn']}：变为花色 {conv}")
-    elif key == "c_talisman":
-        if targets: targets[0].seal = "gold"
-        msgs.append("护符：加上金色蜡封")
-    elif key == "c_aura":
-        if targets: targets[0].edition = game.rng.choice(["foil", "holo", "polychrome"])
-        msgs.append("灵光：附加随机版本")
-    elif key == "c_deja_vu":
-        if targets: targets[0].seal = "red"
-        msgs.append("似曾相识：加上红色蜡封")
-    elif key == "c_trance":
-        if targets: targets[0].seal = "blue"
-        msgs.append("出神：加上蓝色蜡封")
-    elif key == "c_medium":
-        if targets: targets[0].seal = "purple"
-        msgs.append("灵媒：加上紫色蜡封")
-    elif key == "c_cryptid":
-        if targets:
-            c = targets[0]
-            for _ in range(2):
-                game.hand.append(c.copy())
-            game.sort_hand()
-        msgs.append("神秘生物：创建 2 张副本")
-    else:
-        msgs.append(f"未知消耗牌 {key}")
+    handler = _TARGET_CONSUMABLES.get(key)
+    msg = (handler(game, targets, info) if handler is not None
+           else f"未知消耗牌 {key}")
 
     mark_consumable_used(game, key)
     game.consumeables.remove(item)
     game.pending_consumable = None
-    for m in msgs:
-        game.say(m)
+    game.say(msg)
     return "done"
 
 
