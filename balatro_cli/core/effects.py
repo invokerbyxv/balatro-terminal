@@ -571,65 +571,117 @@ def finish_consumable_target(game, target_cards: List[Card]) -> str:
 # ==========================================================================
 # 标签应用
 # ==========================================================================
-def apply_tag(game, tag: Tag):
+def _tag_free_joker_rarity(game, tag):
+    game.pending_shop_free_joker = tag.key.split("_", 1)[1]
+    return None
+
+
+def _tag_noop(game, tag):
+    return None
+
+
+_TAG_PACK = {
+    "tag_standard": "p_standard_mega",
+    "tag_charm": "p_arcana_mega",
+    "tag_meteor": "p_celestial_mega",
+    "tag_buffoon": "p_buffoon_mega",
+    "tag_ethereal": "p_spectral_normal",
+}
+
+
+def _tag_open_pack(game, tag):
     from ..data import boosters as bd
-    k = tag.key
-    d = tag_data.TAGS.get(k, {})
-    cn = d.get("cn", k)
-    if k == "tag_uncommon":
-        game.pending_shop_free_joker = "uncommon"
-    elif k == "tag_rare":
-        game.pending_shop_free_joker = "rare"
-    elif k in ("tag_foil", "tag_holo", "tag_polychrome", "tag_negative"):
-        pass  # 由 _make_joker_for_shop 处理
-    elif k == "tag_investment":
-        game.investment_tag_active = True
-    elif k == "tag_voucher":
-        game.pending_free_voucher = True
-    elif k == "tag_boss":
-        game.boss_key = game._get_new_boss()
-        game.say(f"头目标签：重掷头目为 {blind_boss_cn(game)}")
-    elif k in ("tag_standard", "tag_charm", "tag_meteor", "tag_buffoon", "tag_ethereal"):
-        pk = {"tag_standard": "p_standard_mega", "tag_charm": "p_arcana_mega",
-              "tag_meteor": "p_celestial_mega", "tag_buffoon": "p_buffoon_mega",
-              "tag_ethereal": "p_spectral_normal"}[k]
-        game.say(f"{cn}：开启 {bd.BOOSTERS[pk]['cn']}")
-        game._open_pack_now(pk, free=True)
-    elif k == "tag_handy":
-        game.dollars += game.hands_left
-        game.say(f"{cn}：+${game.hands_left}")
-    elif k == "tag_garbage":
-        game.dollars += game.discards_left
-        game.say(f"{cn}：+${game.discards_left}")
-    elif k == "tag_coupon":
-        game.shop_free = True
-    elif k == "tag_double":
-        pass  # 复制下一个标签，由 Game.add_tag 在获得标签时处理
-    elif k == "tag_juggle":
-        # 对应 Lua 的 round_start_bonus：+3 只作用于下一个回合，回合结束回退
-        game.temp_hand_size += 3
-    elif k == "tag_d_six":
-        game.temp_reroll_cost = 0
-    elif k == "tag_top_up":
-        for _ in range(2):
-            jk = centers_data.random_joker_key(game)
-            if len(game.jokers) < game.joker_slots:
-                cfg = centers_data.joker_cfg(jk)
-                game.jokers.append(JokerItem(key=jk, buy_cost=cfg["cost"], sell_price=max(1, cfg["cost"] // 2)))
-        game.say(f"{cn}：获得 2 张小丑")
-    elif k == "tag_skip":
-        game.dollars += 5 * game.skips
-        game.say(f"{cn}：+${5 * game.skips}")
-    elif k == "tag_orbital":
-        h = game.rng.choice(list(game.hand_levels))
-        game.hand_levels[h] += 3
-        game.say(f"{cn}：{HAND_CN.get(h, h)} 等级 +3")
-    elif k == "tag_economy":
-        gain = min(game.dollars, 40)
-        game.dollars += gain
-        game.say(f"{cn}：+${gain}")
-    else:
-        game.say(f"应用标签：{cn}")
+    pk = _TAG_PACK[tag.key]
+    game.say(f"{tag.key and _tag_cn(tag)}：开启 {bd.BOOSTERS[pk]['cn']}")
+    game._open_pack_now(pk, free=True)
+
+
+def _tag_handy(game, tag):
+    game.dollars += game.hands_left
+    game.say(f"{_tag_cn(tag)}：+${game.hands_left}")
+
+
+def _tag_garbage(game, tag):
+    game.dollars += game.discards_left
+    game.say(f"{_tag_cn(tag)}：+${game.discards_left}")
+
+
+def _tag_boss(game, tag):
+    game.boss_key = game._get_new_boss()
+    game.say(f"头目标签：重掷头目为 {blind_boss_cn(game)}")
+
+
+def _tag_top_up(game, tag):
+    for _ in range(2):
+        jk = centers_data.random_joker_key(game)
+        if len(game.jokers) < game.joker_slots:
+            cfg = centers_data.joker_cfg(jk)
+            game.jokers.append(JokerItem(key=jk, buy_cost=cfg["cost"],
+                                         sell_price=max(1, cfg["cost"] // 2)))
+    game.say(f"{_tag_cn(tag)}：获得 2 张小丑")
+
+
+def _tag_skip(game, tag):
+    game.dollars += 5 * game.skips
+    game.say(f"{_tag_cn(tag)}：+${5 * game.skips}")
+
+
+def _tag_orbital(game, tag):
+    h = game.rng.choice(list(game.hand_levels))
+    game.hand_levels[h] += 3
+    game.say(f"{_tag_cn(tag)}：{HAND_CN.get(h, h)} 等级 +3")
+
+
+def _tag_economy(game, tag):
+    gain = min(game.dollars, 40)
+    game.dollars += gain
+    game.say(f"{_tag_cn(tag)}：+${gain}")
+
+
+def _tag_juggle(game, tag):
+    # 对应 Lua 的 round_start_bonus：+3 只作用于下一个回合，回合结束回退
+    game.temp_hand_size += 3
+
+
+def _tag_cn(tag) -> str:
+    return tag_data.TAGS.get(tag.key, {}).get("cn", tag.key)
+
+
+#: 标签 key -> handler。值固定为 None 的是「已生效但不需要动作」的标签。
+_TAG_HANDLERS = {
+    "tag_uncommon": _tag_free_joker_rarity,
+    "tag_rare": _tag_free_joker_rarity,
+    "tag_foil": _tag_noop,          # 由 _make_joker_for_shop 消费
+    "tag_holo": _tag_noop,
+    "tag_polychrome": _tag_noop,
+    "tag_negative": _tag_noop,
+    "tag_double": _tag_noop,        # 由 Game.add_tag 在获得时复制
+    "tag_investment": lambda g, t: setattr(g, "investment_tag_active", True),
+    "tag_voucher": lambda g, t: setattr(g, "pending_free_voucher", True),
+    "tag_coupon": lambda g, t: setattr(g, "shop_free", True),
+    "tag_d_six": lambda g, t: setattr(g, "temp_reroll_cost", 0),
+    "tag_boss": _tag_boss,
+    "tag_standard": _tag_open_pack,
+    "tag_charm": _tag_open_pack,
+    "tag_meteor": _tag_open_pack,
+    "tag_buffoon": _tag_open_pack,
+    "tag_ethereal": _tag_open_pack,
+    "tag_handy": _tag_handy,
+    "tag_garbage": _tag_garbage,
+    "tag_top_up": _tag_top_up,
+    "tag_skip": _tag_skip,
+    "tag_orbital": _tag_orbital,
+    "tag_economy": _tag_economy,
+    "tag_juggle": _tag_juggle,
+}
+
+
+def apply_tag(game, tag: Tag):
+    handler = _TAG_HANDLERS.get(tag.key)
+    if handler is None:
+        game.say(f"应用标签：{_tag_cn(tag)}")
+        return
+    handler(game, tag)
 
 
 def blind_boss_cn(game) -> str:
