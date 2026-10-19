@@ -25,117 +25,209 @@ def _fmt_x(v: float) -> str:
     return f"×{f'{v:.2f}'.rstrip('0').rstrip('.')}"
 
 
-def joker_live_effect(game, j) -> str:
-    k = j.key
+def _le_yorick(game, j):
     stat = j.stat
+    n = stat.get("discards", 0) // 23
+    return f"{_fmt_x(1.0 + n)}(弃{stat.get('discards', 0)}/{(n + 1) * 23})"
 
-    # ---- 永久成长 ×倍率 ----
-    if k == "j_yorick":
-        n = stat.get("discards", 0) // 23
-        nxt = (n + 1) * 23
-        return f"{_fmt_x(1.0 + n)}(弃{stat.get('discards', 0)}/{nxt})"
-    if k == "j_caino":
-        return _fmt_x(1.0 + game.face_destroyed)
-    if k == "j_hologram":
-        return _fmt_x(1.0 + 0.25 * game.hologram_count)
-    if k == "j_glass":
-        return _fmt_x(1.0 + 0.75 * game.glass_broken)
-    if k == "j_hit_the_road":
-        return _fmt_x(1.0 + 0.5 * stat.get("jacks", 0))
-    if k == "j_constellation":
-        return _fmt_x(1.0 + 0.1 * game.constellation_count)
-    if k == "j_lucky_cat":
-        return _fmt_x(1.0 + 0.25 * game.lucky_triggers)
-    if k == "j_throwback":
-        return _fmt_x(1.0 + 0.25 * game.skips)
-    if k == "j_steel_joker":
-        n = sum(1 for c in game.deck.cards if c.enhanced == "steel")
-        n += sum(1 for c in game.hand if c.enhanced == "steel")
-        return _fmt_x(1.0 + 0.2 * n)
-    if k == "j_baseball":
-        n = sum(1 for oj in game.jokers
-                if centers_data.JOKERS.get(oj.key, {}).get("r") == 2)
-        return _fmt_x(1.0 + 1.5 * n)
-    if k == "j_stencil":
-        empty = game.joker_slots - len(game.jokers)
-        return _fmt_x(float(empty)) if empty >= 1 else "无生效"
-    if k == "j_drivers_license":
-        n = sum(1 for c in game.deck.cards if c.enhanced)
-        n += sum(1 for c in game.hand if c.enhanced)
-        return "×3" if n >= 16 else f"未激活({n}/16)"
-    if k == "j_ramen":
-        return _fmt_x(max(1.0, 2.0 - stat.get("lost", 0.0)))
 
-    # ---- 每轮随机目标（当前生效条件） ----
-    if k == "j_todo_list":
-        t = stat.get("todo", "High Card")
-        return f"目标{HAND_CN.get(t, t)}"
-    if k == "j_ancient":
-        return f"花色{SUIT_CN.get(stat.get('suit', 'S'), stat.get('suit', 'S'))}"
-    if k == "j_idol":
-        r, s = stat.get("card", ("A", "H"))
-        return f"{r}{SUIT_CN.get(s, s)}"
-    if k == "j_mail":
-        return f"目标{stat.get('rank', 'A')}"
+def _le_caino(game, j):
+    return _fmt_x(1.0 + game.face_destroyed)
 
+
+def _le_hologram(game, j):
+    return _fmt_x(1.0 + 0.25 * game.hologram_count)
+
+
+def _le_glass(game, j):
+    return _fmt_x(1.0 + 0.75 * game.glass_broken)
+
+
+def _le_hit_the_road(game, j):
+    return _fmt_x(1.0 + 0.5 * j.stat.get("jacks", 0))
+
+
+def _le_constellation(game, j):
+    return _fmt_x(1.0 + 0.1 * game.constellation_count)
+
+
+def _le_lucky_cat(game, j):
+    return _fmt_x(1.0 + 0.25 * game.lucky_triggers)
+
+
+def _le_throwback(game, j):
+    return _fmt_x(1.0 + 0.25 * game.skips)
+
+
+def _count_enhanced(game, kind=None):
+    """统计牌组与手牌中的增强牌数；kind 为 None 时统计任意增强。"""
+    def match(c):
+        return bool(c.enhanced) if kind is None else c.enhanced == kind
+    return sum(1 for c in game.deck.cards if match(c)) +         sum(1 for c in game.hand if match(c))
+
+
+def _le_steel_joker(game, j):
+    return _fmt_x(1.0 + 0.2 * _count_enhanced(game, "steel"))
+
+
+def _le_baseball(game, j):
+    n = sum(1 for oj in game.jokers
+            if centers_data.JOKERS.get(oj.key, {}).get("r") == 2)
+    return _fmt_x(1.0 + 1.5 * n)
+
+
+def _le_stencil(game, j):
+    empty = game.joker_slots - len(game.jokers)
+    return _fmt_x(float(empty)) if empty >= 1 else "无生效"
+
+
+def _le_drivers_license(game, j):
+    n = _count_enhanced(game)
+    return "×3" if n >= 16 else f"未激活({n}/16)"
+
+
+def _le_ramen(game, j):
+    return _fmt_x(max(1.0, 2.0 - j.stat.get("lost", 0.0)))
+
+
+def _le_todo_list(game, j):
+    t = j.stat.get("todo", "High Card")
+    return f"目标{HAND_CN.get(t, t)}"
+
+
+def _le_ancient(game, j):
+    suit = j.stat.get("suit", "S")
+    return f"花色{SUIT_CN.get(suit, suit)}"
+
+
+def _le_idol(game, j):
+    r, s = j.stat.get("card", ("A", "H"))
+    return f"{r}{SUIT_CN.get(s, s)}"
+
+
+def _le_mail(game, j):
+    return f"目标{j.stat.get('rank', 'A')}"
+
+
+def _le_luchador(game, j):
     # 对应原版卡面的 ACTIVE / NO BOSS ACTIVE
-    if k == "j_luchador":
-        if game.boss_disabled():
-            return "已禁用当前盲注"
-        return "可禁用" if game.current_blind_key() in blind_data.BOSS_BLINDS else "无头目生效"
+    if game.boss_disabled():
+        return "已禁用当前盲注"
+    return "可禁用" if game.current_blind_key() in blind_data.BOSS_BLINDS else "无头目生效"
 
-    # ---- 随局实时 +筹码 / +倍率 ----
-    if k == "j_blue_joker":
-        return f"+{game.deck.count() * 2}筹码"
-    if k == "j_bull":
-        return f"+{game.dollars * 2}筹码"
-    if k == "j_stone":
-        n = sum(1 for c in game.deck.cards if c.enhanced == "stone")
-        n += sum(1 for c in game.hand if c.enhanced == "stone")
-        return f"+{n * 25}筹码"
-    if k == "j_banner":
-        return f"+{game.discards_left * 30}筹码"
-    if k == "j_abstract":
-        return f"+{3 * max(0, len(game.jokers) - 1)}倍率"
-    if k == "j_swashbuckler":
-        total = sum(oj.sell_value() for oj in game.jokers if oj is not j)
-        return f"+{total}倍率"
-    if k == "j_bootstraps":
-        return f"+{(game.dollars // 5) * 2}倍率"
-    if k == "j_fortune_teller":
-        return f"+{game.tarots_used}倍率"
-    if k == "j_mystic_summit":
-        return "+15倍率" if game.discards_left == 0 else "未激活"
-    if k == "j_erosion":
-        below = 52 - len(game.deck.cards)
-        if below > 0:
-            return f"+{4 * below}倍率"
-    if k == "j_raised_fist":
-        held = [c for c in game.hand if not c.debuffed]
-        if held:
-            lowest = min(held, key=lambda c: rank_id(c.rank))
-            return f"+{2 * rank_id(lowest.rank)}倍率"
-    return ""
+
+def _le_blue_joker(game, j):
+    return f"+{game.deck.count() * 2}筹码"
+
+
+def _le_bull(game, j):
+    return f"+{game.dollars * 2}筹码"
+
+
+def _le_stone(game, j):
+    return f"+{_count_enhanced(game, 'stone') * 25}筹码"
+
+
+def _le_banner(game, j):
+    return f"+{game.discards_left * 30}筹码"
+
+
+def _le_abstract(game, j):
+    return f"+{3 * max(0, len(game.jokers) - 1)}倍率"
+
+
+def _le_swashbuckler(game, j):
+    total = sum(oj.sell_value() for oj in game.jokers if oj is not j)
+    return f"+{total}倍率"
+
+
+def _le_bootstraps(game, j):
+    return f"+{(game.dollars // 5) * 2}倍率"
+
+
+def _le_fortune_teller(game, j):
+    return f"+{game.tarots_used}倍率"
+
+
+def _le_mystic_summit(game, j):
+    return "+15倍率" if game.discards_left == 0 else "未激活"
+
+
+def _le_erosion(game, j):
+    below = 52 - len(game.deck.cards)
+    return f"+{4 * below}倍率" if below > 0 else ""
+
+
+def _le_raised_fist(game, j):
+    held = [c for c in game.hand if not c.debuffed]
+    if not held:
+        return ""
+    lowest = min(held, key=lambda c: rank_id(c.rank))
+    return f"+{2 * rank_id(lowest.rank)}倍率"
+
+
+#: 小丑 key -> 实时效果文案（供 UI 预览；未登记的不显示附加信息）
+_LIVE_EFFECTS = {
+    "j_yorick": _le_yorick, "j_caino": _le_caino, "j_hologram": _le_hologram,
+    "j_glass": _le_glass, "j_hit_the_road": _le_hit_the_road,
+    "j_constellation": _le_constellation, "j_lucky_cat": _le_lucky_cat,
+    "j_throwback": _le_throwback, "j_steel_joker": _le_steel_joker,
+    "j_baseball": _le_baseball, "j_stencil": _le_stencil,
+    "j_drivers_license": _le_drivers_license, "j_ramen": _le_ramen,
+    "j_todo_list": _le_todo_list, "j_ancient": _le_ancient,
+    "j_idol": _le_idol, "j_mail": _le_mail, "j_luchador": _le_luchador,
+    "j_blue_joker": _le_blue_joker, "j_bull": _le_bull, "j_stone": _le_stone,
+    "j_banner": _le_banner, "j_abstract": _le_abstract,
+    "j_swashbuckler": _le_swashbuckler, "j_bootstraps": _le_bootstraps,
+    "j_fortune_teller": _le_fortune_teller,
+    "j_mystic_summit": _le_mystic_summit, "j_erosion": _le_erosion,
+    "j_raised_fist": _le_raised_fist,
+}
+
+
+def joker_live_effect(game, j) -> str:
+    handler = _LIVE_EFFECTS.get(j.key)
+    return handler(game, j) if handler else ""
+
+
+#: 小丑 key -> 每轮结算时额外给的钱（对应 card.lua calculate_dollar_bonus）
+def _db_golden(game, joker):
+    return 4
+
+
+def _db_cloud_9(game, joker):
+    return sum(1 for c in game.deck.cards if c.rank == "9")
+
+
+def _db_rocket(game, joker):
+    return joker.stat.get("dollars", 1)
+
+
+def _db_satellite(game, joker):
+    return len(game.planets_used)
+
+
+def _db_to_the_moon(game, joker):
+    return game.dollars // 5
+
+
+def _db_delayed_grat(game, joker):
+    return game.discards_left * 2 if game.discards_used_round == 0 else 0
+
+
+_DOLLAR_BONUS = {
+    "j_golden": _db_golden,
+    "j_cloud_9": _db_cloud_9,
+    "j_rocket": _db_rocket,
+    "j_satellite": _db_satellite,
+    "j_to_the_moon": _db_to_the_moon,
+    "j_delayed_grat": _db_delayed_grat,
+}
 
 
 def joker_dollar_bonus(game, joker: JokerItem) -> int:
-    key = joker.key
-    d = 0
-    if key == "j_golden":
-        d += 4
-    elif key == "j_cloud_9":
-        n = sum(1 for c in game.deck.cards if c.rank == "9")
-        d += n
-    elif key == "j_rocket":
-        d += joker.stat.get("dollars", 1)
-    elif key == "j_satellite":
-        d += len(game.planets_used)
-    elif key == "j_to_the_moon":
-        d += game.dollars // 5
-    elif key == "j_delayed_grat":
-        if game.discards_used_round == 0:
-            d += game.discards_left * 2
-    return d
+    handler = _DOLLAR_BONUS.get(joker.key)
+    return handler(game, joker) if handler else 0
 
 
 def _add_planet(game, key: str) -> None:
