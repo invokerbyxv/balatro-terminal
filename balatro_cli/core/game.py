@@ -60,6 +60,10 @@ class Game:
         self.hands_left = START_PARAMS["hands"]
         self.discards_left = START_PARAMS["discards"]
         self.hand_size = START_PARAMS["hand_size"]
+        #: 手牌上限的持久修正（灵应盘/灵质），与优惠券/小丑加成一起由 round_hand_size 汇总
+        self.hand_size_offset = 0
+        #: 本回合的临时修正（杂耍标签），回合结束时清零（Lua round_resets.temp_handsize）
+        self.temp_hand_size = 0
         self._joker_slots = START_PARAMS["joker_slots"]
         self._consumable_slots = START_PARAMS["consumable_slots"]
         self.interest_cap = 25
@@ -191,6 +195,8 @@ class Game:
         self.hands_left = START_PARAMS["hands"] + cfg.get("hands", 0)
         self.discards_left = START_PARAMS["discards"] + cfg.get("discards", 0)
         self.hand_size = START_PARAMS["hand_size"] + cfg.get("hand_size", 0)
+        self.hand_size_offset = 0
+        self.temp_hand_size = 0
         self.joker_slots = START_PARAMS["joker_slots"] + cfg.get("joker_slot", 0)
         self.consumable_slots = START_PARAMS["consumable_slots"] + cfg.get("consumable_slot", 0)
         self.ante_scaling = cfg.get("ante_scaling", 1)
@@ -316,11 +322,22 @@ class Game:
         from .effects import joker_hand_size_bonus
         key = blind_key or self.current_blind_key()
         cfg = deck_data.DECKS[self.deck_key]["config"] if self.deck_key else {}
-        n = START_PARAMS["hand_size"] + cfg.get("hand_size", 0) + self._voucher_bonus("hand_size")
+        n = (START_PARAMS["hand_size"] + cfg.get("hand_size", 0)
+             + self._voucher_bonus("hand_size") + self.hand_size_offset + self.temp_hand_size)
         n += joker_hand_size_bonus(self)
         if key == "bl_manacle" and not self.boss_disabled():
             n -= 1
         return max(1, n)
+
+    def change_hand_size(self, delta: int, persistent: bool = True):
+        """改变手牌上限：立即作用于本回合，并在计算基准里留下修正。
+
+        ``persistent`` 为真时写入 :attr:`hand_size_offset`（灵应盘/灵质，永久）；
+        否则只影响本回合（黑龟豆，每轮累计已记在小丑的 stat 里）。
+        """
+        self.hand_size = max(1, self.hand_size + delta)
+        if persistent:
+            self.hand_size_offset += delta
 
     def blind_cn(self, key: str) -> str:
         return blind_data.get_blind_cfg(key)["cn"]
@@ -658,7 +675,7 @@ class Game:
             if key == "bl_water":
                 self.discards_left += full_discards
             if key == "bl_manacle":
-                self.hand_size += 1
+                self.change_hand_size(1, persistent=False)
                 self._draw_to_hand()      # 原版 G.hand:change_size(1) 后补抽 1 张
         return True
 
@@ -746,10 +763,13 @@ class Game:
             on_end_round(self, boss_beaten=boss_beaten)
             self.boss_disabled_round = False      # 摔跤手的禁用只作用于本回合
             self._recycle_round_cards()
+            # 对应 state_events.lua 270：临时手牌上限（杂耍标签）在回合结算时回退
+            self.temp_hand_size = 0
             return True
         self.run_lost = True
         self.say("未能达到盲注目标，" + ("无尽模式结束。" if self.endless else "游戏结束。"))
         self.boss_disabled_round = False
+        self.temp_hand_size = 0
         self._recycle_round_cards()
         return False
 

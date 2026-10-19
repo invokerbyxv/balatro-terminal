@@ -236,10 +236,8 @@ def apply_voucher(game, vk: str):
         game.add_consumable_slot()
     if vk == "v_omen_globe":
         game.add_consumable_slot()
-    if vk == "v_paint_brush":
-        game.hand_size += 1
-    if vk == "v_palette":
-        game.hand_size += 2
+    if vk in ("v_paint_brush", "v_palette"):
+        pass  # 手牌上限每回合由 Game.round_hand_size 的 _voucher_bonus 汇总
     if vk in ("v_grabber", "v_nacho_tong", "v_wasteful", "v_recyclomancy"):
         pass  # 每回合生效，见 game.select_blind
     if vk == "v_antimatter":

@@ -1170,7 +1170,7 @@ def _apply_consumable(game, item: ConsumableItem) -> str:
         rank = game.rng.choice(RANKS)
         for c in game.hand:
             c.rank = rank
-        game.hand_size = max(1, game.hand_size - 1)
+        game.change_hand_size(-1)
         game.say(f"灵应盘：所有手牌变成 {rank}，手牌上限 -1")
         game.consumeables.remove(item)
         return "done"
@@ -1179,7 +1179,7 @@ def _apply_consumable(game, item: ConsumableItem) -> str:
             j = game.rng.choice(game.jokers)
             j.edition = "negative"
             game.say(f"灵质：{joker_cn(j.key)} 获得负片版本")
-        game.hand_size = max(1, game.hand_size - 1)
+        game.change_hand_size(-1)
         game.say("灵质：手牌上限 -1")
         game.consumeables.remove(item)
         return "done"
@@ -1366,7 +1366,8 @@ def apply_tag(game, tag: Tag):
     elif k == "tag_double":
         pass  # 复制下一个标签，由 Game.add_tag 在获得标签时处理
     elif k == "tag_juggle":
-        game.hand_size += 3
+        # 对应 Lua 的 round_start_bonus：+3 只作用于下一个回合，回合结束回退
+        game.temp_hand_size += 3
     elif k == "tag_d_six":
         game.temp_reroll_cost = 0
     elif k == "tag_top_up":
@@ -1633,9 +1634,9 @@ def _end_round_fx(game, j, ctx):
             game.jokers.remove(j)
             game.say("卡文迪许消失了！")
     elif k == "j_turtle_bean":
-        # 每轮 -1 记在 stat 里（累计），否则下回合开始会被 round_hand_size 重算冲掉
+        # 每轮 -1 记在 stat 里（累计），下一回合由 round_hand_size 重新汇总
         j.stat["hand_size"] = j.stat.get("hand_size", 0) - 1
-        game.hand_size = max(1, game.hand_size - 1)
+        game.change_hand_size(-1, persistent=False)
 
 
 def on_end_round(game, boss_beaten: bool = False):
