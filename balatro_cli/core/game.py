@@ -879,7 +879,7 @@ class Game:
             if tag.key in ("tag_foil", "tag_holo", "tag_polychrome", "tag_negative"):
                 if j.edition is None:
                     j.edition = {"tag_foil": "foil", "tag_holo": "holo",
-                                 "tag_polychrome": "poly", "tag_negative": "negative"}[tag.key]
+                                 "tag_polychrome": "polychrome", "tag_negative": "negative"}[tag.key]
                     j.couponed = True
                     self.tags.remove(tag)
                     break
@@ -918,7 +918,7 @@ class Game:
         c = Card(rank=self.rng.choice(RANKS), suit=self.rng.choice(SUITS), uid=0)
         c.enhanced = self.rng.choice(ENHANCED)
         if self.rng.chance(20, "std_ed"):
-            c.edition = self.rng.choice(["foil", "holo", "poly"])
+            c.edition = self.rng.choice(["foil", "holo", "polychrome"])
         if self.rng.chance(15, "std_seal"):
             c.seal = self.rng.choice(["gold", "red", "blue", "purple"])
         return c
@@ -1073,7 +1073,7 @@ class Game:
         if self.rng.chance(8, "std_enh"):
             c.enhanced = self.rng.choice(ENHANCED)   # card.py 的无 m_ 前缀键
         if self.rng.chance(20, "std_ed"):
-            c.edition = self.rng.choice(["foil", "holo", "poly"])
+            c.edition = self.rng.choice(["foil", "holo", "polychrome"])
         if self.rng.chance(15, "std_seal"):
             c.seal = self.rng.choice(["gold", "red", "blue", "purple"])
         return c

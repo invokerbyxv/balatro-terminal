@@ -1081,7 +1081,7 @@ def _apply_consumable(game, item: ConsumableItem) -> str:
             game.say("命运之轮：没有小丑牌")
         elif roll_prob(game, 4, "wheel"):
             j = game.rng.choice(game.jokers)
-            j.edition = game.rng.choice(["foil", "holo", "poly"])
+            j.edition = game.rng.choice(["foil", "holo", "polychrome"])
             game.say(f"命运之轮：{joker_cn(j.key)} 获得版本 {j.edition}！")
         else:
             game.say("命运之轮：NOPE！")
@@ -1200,7 +1200,7 @@ def _apply_consumable(game, item: ConsumableItem) -> str:
     if key == "c_hex":
         if game.jokers:
             j = game.rng.choice(game.jokers)
-            j.edition = "poly"
+            j.edition = "polychrome"
             game.say(f"诅咒：{joker_cn(j.key)} 获得彩绘版本")
             for v in list(game.jokers):
                 if v is not j and not v.eternal:
@@ -1299,7 +1299,7 @@ def finish_consumable_target(game, target_cards: List[Card]) -> str:
         if targets: targets[0].seal = "gold"
         msgs.append("护符：加上金色蜡封")
     elif key == "c_aura":
-        if targets: targets[0].edition = game.rng.choice(["foil", "holo", "poly"])
+        if targets: targets[0].edition = game.rng.choice(["foil", "holo", "polychrome"])
         msgs.append("灵光：附加随机版本")
     elif key == "c_deja_vu":
         if targets: targets[0].seal = "red"

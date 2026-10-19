@@ -10,7 +10,8 @@ RANKS = ("2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A")
 
 ENHANCED = ("bonus", "mult", "wild", "glass", "steel", "stone", "gold", "lucky")
 
-EDITIONS = ("foil", "holo", "poly", "negative")
+#: 版本键，与 data/boosters.py 的 ``e_<edition>`` 一一对应
+EDITIONS = ("foil", "holo", "polychrome", "negative")
 
 SEALS = ("gold", "red", "blue", "purple")
 
@@ -19,7 +20,7 @@ ENHANCED_CN = {
     "steel": "钢铁牌", "stone": "石头牌", "gold": "黄金牌", "lucky": "幸运牌",
 }
 EDITION_CN = {
-    "foil": "箔", "holo": "全息", "poly": "彩绘", "negative": "负片",
+    "foil": "箔", "holo": "全息", "polychrome": "彩绘", "negative": "负片",
 }
 SEAL_CN = {"gold": "金", "red": "红", "blue": "蓝", "purple": "紫"}
 
