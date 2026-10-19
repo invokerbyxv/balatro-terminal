@@ -10,7 +10,7 @@ import unittest
 from balatro_cli.core.card import Card
 from balatro_cli.core.game import Game
 from balatro_cli.core.hand_eval import evaluate_poker_hand, best_hand
-from balatro_cli.core.items import BoosterPack, ConsumableItem, JokerItem
+from balatro_cli.core.items import BoosterPack, ConsumableItem, JokerItem, Tag
 from balatro_cli.core.scoring import card_edition, evaluate_play, blocked_play_reason
 from tests.helpers import (cards, greedy_play, new_game, play_rounds, select_cards,
                            select_rank, set_hand, snapshot)
@@ -237,6 +237,58 @@ class TestBossDetails(unittest.TestCase):
         b.chips = b.current_blind_chips()
         b.end_round()
         self.assertEqual(b.jokers[0].stat["dollars"], 3)
+
+
+class TestHookCoverage(unittest.TestCase):
+    """确保每条钩子分支都能被实际执行到（防止拆分时漏 import 之类的问题）。"""
+
+    def test_all_hooks_run(self):
+        from balatro_cli.core import effects
+
+        cases = [
+            (effects.on_blind_select, ()),
+            (effects.on_discard, ([Card("A", "S"), Card("K", "H"), Card("J", "D")],)),
+            (effects.on_end_round, (True,)),
+        ]
+        keys = set()
+        for table in (effects._BLIND_SELECT_HOOKS, effects._DISCARD_HOOKS,
+                      effects._END_ROUND_HOOKS):
+            keys |= set(table)
+        self.assertTrue(keys)
+
+        for joker_key in sorted(keys):
+            for fn, args in cases:
+                g = new_game(seed=5)
+                g.jokers = [JokerItem(key=joker_key)]
+                g.dollars = 20
+                try:
+                    fn(g, *args)
+                except Exception as exc:       # noqa: BLE001 - 测试里要看到具体是哪个
+                    self.fail(f"{fn.__name__} + {joker_key}: {type(exc).__name__}: {exc}")
+
+    def test_hooks_with_blueprint_forward(self):
+        from balatro_cli.core import effects
+
+        for joker_key in sorted(set(effects._BLIND_SELECT_HOOKS) |
+                                set(effects._DISCARD_HOOKS) |
+                                set(effects._END_ROUND_HOOKS)):
+            g = new_game(seed=5)
+            g.jokers = [JokerItem(key="j_blueprint"), JokerItem(key=joker_key)]
+            for fn, args in ((effects.on_blind_select, ()),
+                             (effects.on_discard, ([Card("A", "S")],)),
+                             (effects.on_end_round, (False,))):
+                try:
+                    fn(g, *args)
+                except Exception as exc:   # noqa: BLE001
+                    self.fail(f"blueprint->{joker_key} {fn.__name__}: {exc}")
+
+    def test_all_tags_apply(self):
+        from balatro_cli.data.tags import TAGS
+        from balatro_cli.core.effects import apply_tag
+        for key in TAGS:
+            g = new_game(seed=5)
+            g.dollars = 20
+            apply_tag(g, Tag(key=key))
 
 
 class TestDeterminism(unittest.TestCase):

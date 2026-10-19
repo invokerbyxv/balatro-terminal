@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import List
 
-from .card import Card
+from .card import Card, ENHANCED, RANKS, SUITS
 from .items import JokerItem, ConsumableItem, BoosterPack
 from ..data import boosters as booster_data
 from ..data import consumables as consumable_data

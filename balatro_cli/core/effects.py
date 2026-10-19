@@ -10,7 +10,7 @@ from ..data import consumables as consumable_data
 from ..data import tags as tag_data
 from ..data import blinds as blind_data
 from .lookup import joker_cn, roll_prob
-from .joker_fx import JOKER_FX, calculate_joker, is_face_card
+from .joker_fx import JOKER_FX, _joker_index, calculate_joker, is_face_card
 
 
 
@@ -765,73 +765,129 @@ def joker_hand_size_bonus(game) -> int:
     return n
 
 
-#: 选盲注钩子里能被蓝图复制的小丑：原版这些分支没有 `not context.blueprint` 守卫。
-#: 希科、疯狂、典礼匕首带守卫；托钵僧/快乐安迪/醉汉以及每轮轮换目标在原版并不
-#: 走 calculate_joker（前者是持有时生效的常驻数值，后者在回合重置时掷出），
-#: 这里同样不接受转发，免得蓝图让它们重复结算。
-_BLIND_SELECT_COPYABLE = {
-    "j_riff_raff", "j_marble", "j_cartomancer", "j_burglar", "j_certificate",
+# ==========================================================================
+# 钩子表
+#
+# 每个事件一张 {小丑 key: (handler, copyable)} 表。``copyable`` 表示该分支在
+# 原版 Lua 里没有 `not context.blueprint` 守卫——蓝图/头脑风暴转发过来时仍然
+# 生效；否则转发一律跳过。钩子函数本身只做业务，不再重复写守卫。
+# ==========================================================================
+def _make_hook(table):
+    """把 (handler, copyable) 表包成 _hook_walk 需要的回调。"""
+    def fx(game, j, ctx):
+        entry = table.get(j.key)
+        if entry is None:
+            return
+        handler, copyable = entry
+        if ctx.blueprint and not copyable:
+            return
+        handler(game, j, ctx)
+    return fx
+
+
+# ---- 选盲注 ----
+def _bs_riff_raff(game, j, ctx):
+    for _ in range(2):
+        if len(game.jokers) < game.joker_slots:
+            jk = centers_data.random_joker_key(game, rarity=1)
+            cfg = centers_data.joker_cfg(jk)
+            game.jokers.append(JokerItem(key=jk, buy_cost=cfg["cost"],
+                                         sell_price=max(1, cfg["cost"] // 2)))
+            game.say(f"乌合之众：获得 {cfg['cn']}")
+
+
+def _bs_marble(game, j, ctx):
+    game.deck.add(Card(rank="A", suit="S", enhanced="stone", uid=0))
+    game.hologram_count += 1
+    game.say("大理石小丑：牌组 +1 石头牌")
+
+
+def _bs_ceremonial(game, j, ctx):
+    victims = list(game.jokers[_joker_index(game, j) + 1:])
+    if not victims:
+        return
+    victim = victims[0]
+    gain = victim.sell_value() * 2
+    j.stat["mult"] = j.stat.get("mult", 0) + gain
+    game.jokers.remove(victim)
+    game.say(f"典礼匕首：销毁 {joker_cn(victim.key)}，+{gain} 倍率")
+
+
+def _bs_madness(game, j, ctx):
+    j.stat["x_mult"] = j.stat.get("x_mult", 1.0) + 0.5
+    others = [x for x in game.jokers if x is not j and not x.eternal]
+    if others:
+        victim = game.rng.choice(others)
+        game.jokers.remove(victim)
+        game.say("疯狂：+×0.5 倍率，销毁 1 张小丑")
+
+
+def _bs_cartomancer(game, j, ctx):
+    game.gain_random_consumable_of("tarot")
+    game.say("占卜师：生成塔罗牌")
+
+
+def _bs_burglar(game, j, ctx):
+    game.hands_left += 3
+    game.discards_left = 0
+    game.say("盗贼：+3 手牌，失去全部弃牌")
+
+
+def _bs_certificate(game, j, ctx):
+    game.hand.append(_random_card(game, seal=True))
+    game.sort_hand()
+    game.say("证书：随机蜡封牌入手")
+
+
+def _bs_troubadour(game, j, ctx):
+    game.hands_left = max(1, game.hands_left - 1)
+
+
+def _bs_merry_andy(game, j, ctx):
+    game.discards_left += 3
+
+
+def _bs_drunkard(game, j, ctx):
+    game.discards_left += 1
+
+
+def _bs_todo(game, j, ctx):
+    j.stat["todo"] = game.rng.choice(list(HAND_ORDER))
+
+
+def _bs_suit(game, j, ctx):
+    j.stat["suit"] = game.rng.choice(SUITS)
+
+
+def _bs_idol(game, j, ctx):
+    j.stat["card"] = (game.rng.choice(RANKS), game.rng.choice(SUITS))
+
+
+def _bs_mail(game, j, ctx):
+    j.stat["rank"] = game.rng.choice(RANKS)
+
+
+#: key -> (handler, 可被蓝图复制)。希科/疯狂/典礼匕首带守卫；
+#: 乌合之众/大理石/占卜师/盗贼/证书在原版没有守卫，可被转发。
+_BLIND_SELECT_HOOKS = {
+    "j_riff_raff": (_bs_riff_raff, True),
+    "j_marble": (_bs_marble, True),
+    "j_ceremonial": (_bs_ceremonial, False),
+    "j_madness": (_bs_madness, False),
+    "j_cartomancer": (_bs_cartomancer, True),
+    "j_burglar": (_bs_burglar, True),
+    "j_certificate": (_bs_certificate, True),
+    "j_troubadour": (_bs_troubadour, False),
+    "j_merry_andy": (_bs_merry_andy, False),
+    "j_drunkard": (_bs_drunkard, False),
+    "j_todo_list": (_bs_todo, False),
+    "j_ancient": (_bs_suit, False),
+    "j_idol": (_bs_idol, False),
+    "j_mail": (_bs_mail, False),
+    "j_castle": (_bs_suit, False),
 }
 
-
-def _blind_select_fx(game, j, ctx):
-    k = j.key
-    if ctx.blueprint and k not in _BLIND_SELECT_COPYABLE:
-        return
-    if k == "j_riff_raff":
-        for _ in range(2):
-            if len(game.jokers) < game.joker_slots:
-                jk = centers_data.random_joker_key(game, rarity=1)
-                cfg = centers_data.joker_cfg(jk)
-                game.jokers.append(JokerItem(key=jk, buy_cost=cfg["cost"], sell_price=max(1, cfg["cost"] // 2)))
-                game.say(f"乌合之众：获得 {cfg['cn']}")
-    elif k == "j_marble":
-        from .card import Card
-        game.deck.add(Card(rank="A", suit="S", enhanced="stone", uid=0))
-        game.hologram_count += 1
-        game.say("大理石小丑：牌组 +1 石头牌")
-    elif k == "j_ceremonial":
-        victims = [x for x in game.jokers[_joker_index(game, j) + 1:]]
-        if victims:
-            victim = victims[0]
-            gain = victim.sell_value() * 2
-            j.stat["mult"] = j.stat.get("mult", 0) + gain
-            game.jokers.remove(victim)
-            game.say(f"典礼匕首：销毁 {joker_cn(victim.key)}，+{gain} 倍率")
-    elif k == "j_madness":
-        j.stat["x_mult"] = j.stat.get("x_mult", 1.0) + 0.5
-        others = [x for x in game.jokers if x is not j and not x.eternal]
-        if others:
-            victim = game.rng.choice(others)
-            game.jokers.remove(victim)
-            game.say("疯狂：+×0.5 倍率，销毁 1 张小丑")
-    elif k == "j_cartomancer":
-        game.gain_random_consumable_of("tarot")
-        game.say("占卜师：生成塔罗牌")
-    elif k == "j_burglar":
-        game.hands_left += 3
-        game.discards_left = 0
-        game.say("盗贼：+3 手牌，失去全部弃牌")
-    elif k == "j_certificate":
-        game.hand.append(_random_card(game, seal=True))
-        game.sort_hand()
-        game.say("证书：随机蜡封牌入手")
-    elif k == "j_troubadour":
-        game.hands_left = max(1, game.hands_left - 1)
-    elif k == "j_merry_andy":
-        game.discards_left += 3
-    elif k == "j_drunkard":
-        game.discards_left += 1
-    elif k == "j_todo_list":
-        j.stat["todo"] = game.rng.choice(list(HAND_ORDER))
-    elif k == "j_ancient":
-        j.stat["suit"] = game.rng.choice(SUITS)
-    elif k == "j_idol":
-        j.stat["card"] = (game.rng.choice(RANKS), game.rng.choice(SUITS))
-    elif k == "j_mail":
-        j.stat["rank"] = game.rng.choice(RANKS)
-    elif k == "j_castle":
-        j.stat["suit"] = game.rng.choice(SUITS)
+_blind_select_fx = _make_hook(_BLIND_SELECT_HOOKS)
 
 
 def on_blind_select(game):
@@ -839,62 +895,90 @@ def on_blind_select(game):
     _hook_walk(game, HookCtx(), _blind_select_fx)
 
 
-#: 弃牌钩子里能被蓝图复制的小丑：原版只有邮件回扣、无面小丑、烧焦小丑的分支
-#: 没带 `not context.blueprint` 守卫（烧焦小丑写的是从未赋值的 context.hook）。
-#: 约里克、顺路、拉面、城堡、交易卡、预留车位都带守卫，蓝图贴着它们不额外结算。
-_DISCARD_COPYABLE = {"j_mail", "j_faceless", "j_burnt"}
+# ---- 弃牌 ----
+def _dc_yorick(game, j, ctx):
+    j.stat["discards"] = j.stat.get("discards", 0) + len(ctx.discarded)
 
 
-def _discard_fx(game, j, ctx):
-    k = j.key
-    if ctx.blueprint and k not in _DISCARD_COPYABLE:
-        return
-    discarded = ctx.discarded
-    if k == "j_yorick":
-        j.stat["discards"] = j.stat.get("discards", 0) + len(discarded)
-    elif k == "j_hit_the_road":
-        n = sum(1 for c in discarded if c.rank == "J")
-        if n:
-            j.stat["jacks"] = j.stat.get("jacks", 0) + n
-    elif k == "j_ramen":
-        j.stat["lost"] = j.stat.get("lost", 0.0) + 0.01 * len(discarded)
-    elif k == "j_mail":
-        if any(c.rank == j.stat.get("rank", "A") for c in discarded):
-            game.dollars += 5
-            game.say("邮寄回扣：+$5")
-    elif k == "j_castle":
-        suit = j.stat.get("suit", "S")
-        n = sum(1 for c in discarded if c.is_suit(suit, smeared=game.any_joker("j_smeared")))
-        if n:
-            j.stat["chips"] = j.stat.get("chips", 0) + 3 * n
-    elif k == "j_reserved_parking":
-        faces = [c for c in game.hand if is_face_card(c, game)]
-        for c in faces:
-            if roll_prob(game, 2, "parking"):
-                game.dollars += 1
-        if faces:
-            game.say("预留车位：+$")
-    elif k == "j_faceless":
-        faces = [c for c in discarded if is_face_card(c, game)]
-        if len(faces) >= 3:
-            game.dollars += 5
-            game.say("无脸小丑：+$5")
-    elif k == "j_trading" and game.discards_used_round == 0 and len(discarded) == 1:
-        c = discarded[0]
-        # 牌此刻在 _round_cards，不在 deck.cards；须 notify_destroyed 标记销毁，回合结束才不会被回收（人头牌计入卡尼奥）
+def _dc_hit_the_road(game, j, ctx):
+    n = sum(1 for c in ctx.discarded if c.rank == "J")
+    if n:
+        j.stat["jacks"] = j.stat.get("jacks", 0) + n
+
+
+def _dc_ramen(game, j, ctx):
+    j.stat["lost"] = j.stat.get("lost", 0.0) + 0.01 * len(ctx.discarded)
+
+
+def _dc_mail(game, j, ctx):
+    if any(c.rank == j.stat.get("rank", "A") for c in ctx.discarded):
+        game.dollars += 5
+        game.say("邮寄回扣：+$5")
+
+
+def _dc_castle(game, j, ctx):
+    suit = j.stat.get("suit", "S")
+    n = sum(1 for c in ctx.discarded
+            if c.is_suit(suit, smeared=game.any_joker("j_smeared")))
+    if n:
+        j.stat["chips"] = j.stat.get("chips", 0) + 3 * n
+
+
+def _dc_reserved_parking(game, j, ctx):
+    faces = [c for c in game.hand if is_face_card(c, game)]
+    for _ in faces:
+        if roll_prob(game, 2, "parking"):
+            game.dollars += 1
+    if faces:
+        game.say("预留车位：+$")
+
+
+def _dc_faceless(game, j, ctx):
+    faces = [c for c in ctx.discarded if is_face_card(c, game)]
+    if len(faces) >= 3:
+        game.dollars += 5
+        game.say("无脸小丑：+$5")
+
+
+def _dc_trading(game, j, ctx):
+    if game.discards_used_round == 0 and len(ctx.discarded) == 1:
+        c = ctx.discarded[0]
+        # 牌此刻在 _round_cards，不在 deck.cards；须 notify_destroyed 标记销毁，
+        # 回合结束才不会被回收（人头牌计入卡尼奥）
         game.notify_destroyed(c)
         game.dollars += 3
         game.say("交易卡：销毁该牌 +$3")
-    elif k == "j_burnt" and game.discards_used_round == 0:
-        name, _ = evaluate_poker_hand(
-            discarded,
-            four_fingers=game.any_joker("j_four_fingers"),
-            shortcut=game.any_joker("j_shortcut"),
-            smeared=game.any_joker("j_smeared"),
-        )
-        if name:
-            game.hand_levels[name] += 1
-            game.say(f"烧焦小丑：{HAND_CN.get(name, name)} 等级 +1")
+
+
+def _dc_burnt(game, j, ctx):
+    if game.discards_used_round != 0:
+        return
+    name, _ = evaluate_poker_hand(
+        ctx.discarded,
+        four_fingers=game.any_joker("j_four_fingers"),
+        shortcut=game.any_joker("j_shortcut"),
+        smeared=game.any_joker("j_smeared"),
+    )
+    if name:
+        game.hand_levels[name] += 1
+        game.say(f"烧焦小丑：{HAND_CN.get(name, name)} 等级 +1")
+
+
+#: 原版只有邮件回扣、无面小丑、烧焦小丑的分支没带蓝图守卫
+#: （烧焦小丑写的是从未赋值的 context.hook）。
+_DISCARD_HOOKS = {
+    "j_yorick": (_dc_yorick, False),
+    "j_hit_the_road": (_dc_hit_the_road, False),
+    "j_ramen": (_dc_ramen, False),
+    "j_mail": (_dc_mail, True),
+    "j_castle": (_dc_castle, False),
+    "j_reserved_parking": (_dc_reserved_parking, False),
+    "j_faceless": (_dc_faceless, True),
+    "j_trading": (_dc_trading, False),
+    "j_burnt": (_dc_burnt, True),
+}
+
+_discard_fx = _make_hook(_DISCARD_HOOKS)
 
 
 def on_discard(game, discarded: List[Card]):
@@ -902,36 +986,53 @@ def on_discard(game, discarded: List[Card]):
     _hook_walk(game, HookCtx(discarded=discarded), _discard_fx)
 
 
-def _end_round_fx(game, j, ctx):
-    # 原版整个 end_of_round 分支都包在 `elseif not context.blueprint` 里，
-    # 所以蓝图/头脑风暴转发过来时一律不生效：成长与消亡每轮只结算一次。
-    if ctx.blueprint:
-        return
-    k = j.key
-    if k == "j_egg":
-        j.sell_price += 3
-    elif k == "j_gift":
-        for x in game.jokers:
-            x.sell_price += 1
-        for x in game.consumeables:
-            x.sell_price += 1
-    elif k == "j_rocket":
-        # 对应 card.lua 2896：只有击败头目（G.GAME.blind.boss）才 +2，其余回合
-        # 不增长；收入部分由 calculate_dollar_bonus 每轮固定给出 stat["dollars"]。
-        if ctx.boss_beaten:
-            j.stat["dollars"] = j.stat.get("dollars", 1) + 2
-    elif k == "j_gros_michel":
-        if game.rng.chance(6, "gros"):
-            game.jokers.remove(j)
-            game.say("格罗斯米歇尔碎了！")
-    elif k == "j_cavendish":
-        if game.rng.chance(1000, "cav"):
-            game.jokers.remove(j)
-            game.say("卡文迪许消失了！")
-    elif k == "j_turtle_bean":
-        # 每轮 -1 记在 stat 里（累计），下一回合由 round_hand_size 重新汇总
-        j.stat["hand_size"] = j.stat.get("hand_size", 0) - 1
-        game.change_hand_size(-1, persistent=False)
+# ---- 回合结束 ----
+def _er_egg(game, j, ctx):
+    j.sell_price += 3
+
+
+def _er_gift(game, j, ctx):
+    for x in game.jokers:
+        x.sell_price += 1
+    for x in game.consumeables:
+        x.sell_price += 1
+
+
+def _er_rocket(game, j, ctx):
+    # card.lua 2896：只有击败头目才 +2；每轮收入由 calculate_dollar_bonus 给出
+    if ctx.boss_beaten:
+        j.stat["dollars"] = j.stat.get("dollars", 1) + 2
+
+
+def _er_gros_michel(game, j, ctx):
+    if game.rng.chance(6, "gros"):
+        game.jokers.remove(j)
+        game.say("格罗斯米歇尔碎了！")
+
+
+def _er_cavendish(game, j, ctx):
+    if game.rng.chance(1000, "cav"):
+        game.jokers.remove(j)
+        game.say("卡文迪许消失了！")
+
+
+def _er_turtle_bean(game, j, ctx):
+    # 每轮 -1 记在 stat 里（累计），下一回合由 round_hand_size 重新汇总
+    j.stat["hand_size"] = j.stat.get("hand_size", 0) - 1
+    game.change_hand_size(-1, persistent=False)
+
+
+#: 原版整个 end_of_round 分支都包在 `elseif not context.blueprint` 里
+_END_ROUND_HOOKS = {
+    "j_egg": (_er_egg, False),
+    "j_gift": (_er_gift, False),
+    "j_rocket": (_er_rocket, False),
+    "j_gros_michel": (_er_gros_michel, False),
+    "j_cavendish": (_er_cavendish, False),
+    "j_turtle_bean": (_er_turtle_bean, False),
+}
+
+_end_round_fx = _make_hook(_END_ROUND_HOOKS)
 
 
 def on_end_round(game, boss_beaten: bool = False):
