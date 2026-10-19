@@ -864,7 +864,10 @@ def _end_round_fx(game, j, ctx):
         for x in game.consumeables:
             x.sell_price += 1
     elif k == "j_rocket":
-        j.stat["dollars"] = j.stat.get("dollars", 1) + (2 if ctx.boss_beaten else 1)
+        # 对应 card.lua 2896：只有击败头目（G.GAME.blind.boss）才 +2，其余回合
+        # 不增长；收入部分由 calculate_dollar_bonus 每轮固定给出 stat["dollars"]。
+        if ctx.boss_beaten:
+            j.stat["dollars"] = j.stat.get("dollars", 1) + 2
     elif k == "j_gros_michel":
         if game.rng.chance(6, "gros"):
             game.jokers.remove(j)

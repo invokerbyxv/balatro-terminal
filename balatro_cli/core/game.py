@@ -467,7 +467,16 @@ class Game(ShopMixin, PackMixin, ConsumableMixin):
         return n
 
     def _draw_to_hand(self):
-        need = self.hand_size - len(self.hand)
+        """补牌至手牌上限；蛇头目改为「抽到 3 张」。
+
+        对应 state_events.lua 的 draw_from_deck_to_hand：蛇在已经出过牌或弃过牌后
+        把 ``hand_space`` 固定为 3（不是补满手牌）。补牌发生在 play_selected 里
+        递增 hands_played_round 之后，所以这里读到的就是「本回合已出过牌」。
+        """
+        if self._serpent_active():
+            need = 3
+        else:
+            need = self.hand_size - len(self.hand)
         while need > 0 and self.deck.count() > 0:
             c = self.deck.draw_one(self.rng)
             self.hand.append(c)
@@ -483,6 +492,10 @@ class Game(ShopMixin, PackMixin, ConsumableMixin):
         self.sort_hand()
         if self.deck.count() == 0 and len(self.hand) == 0:
             self.say("牌组已耗尽！")
+
+    def _serpent_active(self) -> bool:
+        return (self.blind_key == "bl_serpent" and not self.boss_disabled()
+                and (self.hands_played_round > 0 or self.discards_used_round > 0))
 
     def blind_stays_flipped(self, card: Card) -> bool:
         """刚抽到手牌的牌是否保持背面朝下（对应 blind.lua 的 Blind:stay_flipped）。"""
@@ -641,8 +654,8 @@ class Game(ShopMixin, PackMixin, ConsumableMixin):
                 self.hand.remove(c)
                 self._round_cards.append(c)
             self.say(f"钩子：随机弃掉了 {n} 张手牌")
-        if b == "bl_serpent":
-            self._draw_to_hand()
+        # 蛇的补牌由 _draw_to_hand 统一处理（对应 draw_from_deck_to_hand 里对蛇的
+        # hand_space = 3 覆盖），这里不能再抽一次
 
     def boss_disabled(self) -> bool:
         """头目盲注效果是否被禁用（奇科特 / 出售摔跤手）。"""

@@ -188,6 +188,57 @@ class TestShopAndPacks(unittest.TestCase):
             self.assertIsNone(g.pending_pack)
 
 
+class TestBossDetails(unittest.TestCase):
+    def serpent_game(self, seed=1):
+        g = new_game(seed=seed, blind=False)
+        g.ante, g.boss_key = 2, "bl_serpent"
+        g.blind_on_deck = "Boss"
+        g.select_blind()
+        self.assertEqual(g.blind_key, "bl_serpent")
+        return g
+
+    def test_serpent_draws_three_not_to_limit(self):
+        # 出 5 张后剩 3 张，蛇再抽 3 张 → 6 张
+        g = self.serpent_game()
+        select_cards(g, 5)
+        g.play_selected()
+        self.assertEqual(len(g.hand), 6)
+
+    def test_serpent_also_on_discard(self):
+        # 弃 2 张后剩 6 张，蛇再抽 3 张 → 9 张
+        g = self.serpent_game()
+        select_cards(g, 2)
+        g.discard_selected()
+        self.assertEqual(len(g.hand), 9)
+
+    def test_serpent_not_on_first_deal(self):
+        g = self.serpent_game()
+        self.assertEqual(len(g.hand), 8)
+
+    def test_serpent_disabled_by_chicot(self):
+        g = self.serpent_game()
+        g.jokers.append(JokerItem(key="j_chicot"))
+        select_cards(g, 5)
+        g.play_selected()
+        self.assertEqual(len(g.hand), 8)
+
+    def test_rocket_upgrades_only_after_boss(self):
+        # 普通盲注：不增长，收入仍是 1
+        g = new_game(seed=1)
+        g.jokers.append(JokerItem(key="j_rocket"))
+        g.chips = g.current_blind_chips()
+        g.end_round()
+        self.assertEqual(g.jokers[0].stat.get("dollars", 1), 1)
+        # 头目盲注：+2
+        b = new_game(seed=1, blind=False)
+        b.ante, b.boss_key = 2, "bl_club"
+        b.blind_on_deck, b.blind_key = "Boss", "bl_club"
+        b.jokers.append(JokerItem(key="j_rocket"))
+        b.chips = b.current_blind_chips()
+        b.end_round()
+        self.assertEqual(b.jokers[0].stat["dollars"], 3)
+
+
 class TestDeterminism(unittest.TestCase):
     def test_same_seed_same_run(self):
         runs = []
