@@ -70,13 +70,6 @@ class BoosterPack:
 
 
 @dataclass
-class VoucherSlot:
-    """商店中展示的优惠券。redeem 后立即生效，不保留。"""
-    key: str
-    cost: int = 10
-
-
-@dataclass
 class Tag:
     key: str
     skips: int = field(default=0)     # 生成时已跳过的盲注数

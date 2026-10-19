@@ -172,15 +172,6 @@ JOKERS.pop("j_dna_dup", None)
 # 稀有度名称
 RARITY_CN = {1: "普通", 2: "罕见", 3: "稀有", 4: "传说"}
 
-# 不可被蓝图复制的
-NOT_BLUEPRINT = {
-    "j_four_fingers", "j_chaos", "j_delayed_grat", "j_pareidolia", "j_splash",
-    "j_sixth_sense", "j_shortcut", "j_egg", "j_gift", "j_turtle_bean",
-    "j_oops", "j_ring_master", "j_juggler", "j_drunkard", "j_trading",
-    "j_to_the_moon", "j_satellite", "j_astronomer", "j_mr_bones", "j_chicot",
-    "j_invisible", "j_diet_cola", "j_golden", "j_midas_mask", "j_cloud_9",
-}
-
 # 打折字段（在商店打折的券）
 DISCOUNT_VOUCHERS = {}
 
@@ -191,20 +182,8 @@ def joker_cfg(key: str) -> dict:
             "e": d.get("e", "")}
 
 
-def joker_price(key: str, dollars: int) -> int:
+def joker_price(key: str) -> int:
     return JOKERS.get(key, {}).get("c", 1)
-
-
-def pool_jokers(exclude: set, rarity=None, min_ante=1) -> list:
-    """卡池中的小丑 key 列表。"""
-    out = []
-    for k, d in JOKERS.items():
-        if k in exclude:
-            continue
-        if rarity is not None and d["r"] != rarity:
-            continue
-        out.append(k)
-    return out
 
 
 def random_joker_key(game, rarity=None, exclude=None) -> str:

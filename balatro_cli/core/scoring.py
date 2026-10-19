@@ -37,7 +37,6 @@ class Ctx:
     other_card: Optional[Card] = None
     other_joker: Optional[object] = None
     hand_being_evaluated: bool = False
-    full_hand: bool = False
     game: Optional[object] = None
 
 

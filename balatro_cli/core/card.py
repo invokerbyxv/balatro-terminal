@@ -61,8 +61,6 @@ class Card:
     face_down: bool = False
     uid: int = field(default=0, compare=False)
 
-    seal_purple_used: bool = field(default=False, compare=False)
-
     def __eq__(self, other):
         return self is other
 
@@ -153,7 +151,6 @@ class Card:
             edition=self.edition, seal=self.seal, debuffed=self.debuffed,
             face_down=self.face_down, uid=self.uid,
         )
-        c.seal_purple_used = self.seal_purple_used
         return c
 
     def __repr__(self):

@@ -49,7 +49,6 @@ class Game:
         import os
         self.seed = seed if seed is not None else (os.urandom(4)[0] | (os.urandom(4)[0] << 8))
         self.rng = RNG(self.seed)
-        self.log: List[str] = []
         self.messages: List[str] = []          # 最近一轮展示消息
         self.deck_key: str | None = None
         self.deck: Deck = Deck()
@@ -127,7 +126,6 @@ class Game:
         self.last_shop_was_first = False
 
         # 标签 / 缓冲
-        self.pending_tags: List[Tag] = []        # 跳过盲注获得的标签，进商店时应用
         self.blind_tags: dict = {}               # 本底注各盲注的跳过标签 {Small/Big/Boss: 标签键}，reset_blinds 预生成
 
         # 统计与效果状态（由 effects.py 读写）
@@ -283,10 +281,6 @@ class Game:
         min_use = min(self.bosses_used.count(c) for c in candidates)
         pool = [c for c in candidates if self.bosses_used.count(c) == min_use]
         return self.rng.choice(pool, "boss")
-
-    def blind_list(self) -> List[str]:
-        """当前底注的盲注顺序（小/大/头目）。"""
-        return ["bl_small", "bl_big", self.boss_key or "bl_big"]
 
     def current_blind_key(self) -> str:
         """当前盲注键；``blind_key`` 未定（选盲注阶段）时按 ``blind_on_deck`` 推导。"""
@@ -541,10 +535,6 @@ class Game:
             return False
         card.selected = not getattr(card, "selected", False)
         return True
-
-    def clear_selection(self):
-        for c in self.hand:
-            c.selected = False
 
     def sort_hand(self, mode: Optional[str] = None):
         """对手牌排序（仅影响显示顺序，不影响出牌/弃牌/牌型判定）。
@@ -842,7 +832,6 @@ class Game:
                 rows.append(f"利息 +${interest}")
         self.dollars += income
         self.say("  |  ".join(rows))
-        self.round_income_total = income
 
     # ------------------------------------------------------------------
     # 商店
@@ -894,7 +883,7 @@ class Game:
     def _make_joker_for_shop(self, key: str):
         cfg = centers_data.joker_cfg(key)
         j = JokerItem(key=key)
-        j.buy_cost = centers_data.joker_price(key, self.dollars)
+        j.buy_cost = centers_data.joker_price(key)
         j.sell_price = max(1, cfg.get("cost", 1) // 2)
         # 标签应用版本（tag.lua store_joker_modify）：首个商店小丑获得版本后标签即被消费；
         # 这类小丑同时带 couponed，在商店内免费
@@ -1185,11 +1174,6 @@ class Game:
         # 进商店时已生效的标签在此消费，避免下次商店重复触发；双重标签与没被商店
         # 小丑用掉的版本标签留到后续事件（原版标签一直留在收藏里直到触发为止）。
         self.tags = [t for t in self.tags if t.key in PERSISTENT_TAGS]
-        # 检查下一盲注
-        self._advance_blind_from_shop()
-
-    def _advance_blind_from_shop(self):
-        pass  # 盲注推进由 end_round 完成
 
     @property
     def free_rerolls(self) -> int:
