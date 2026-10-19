@@ -1,6 +1,8 @@
-"""游戏主状态机：一局完整流程、回合、经济、商店、盲注调度。
+"""游戏主状态机：建局、盲注调度、出牌弃牌、回合结算与收入。
 
 对应 Lua game.lua + functions/* 的状态机。纯逻辑，不含 I/O。
+商店 / 卡包 / 消耗品 / 标签分别在 shop.py、packs.py、consumables.py 里，
+通过 mixin 组合成完整的 Game。
 """
 import random
 from typing import List, Optional
