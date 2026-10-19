@@ -5,16 +5,25 @@
 import random
 from typing import List, Optional
 
-from .card import Card, SUITS
+from .card import Card, ENHANCED, RANKS, SUITS
 from .deck import Deck, build_deck
 from .rng import RNG
 from .items import JokerItem, ConsumableItem, BoosterPack, Tag
+from .hand_eval import HAND_ORDER
+from .effects import (
+    apply_tag, finish_consumable_target, is_face_card, joker_cn,
+    joker_dollar_bonus, joker_hand_size_bonus, on_blind_select, on_discard,
+    on_end_round, on_reroll, on_sell_joker, on_shop_closed, roll_prob,
+    use_consumable,
+)
+from .scoring import evaluate_play
 from ..data import decks as deck_data
 from ..data import blinds as blind_data
 from ..data import tags as tag_data
 from ..data import boosters as booster_data
 from ..data import consumables as consumable_data
 from ..data import vouchers as voucher_data
+from ..data import centers as centers_data
 
 # 起始参数（misc_functions.lua get_starting_params）
 START_PARAMS = {
@@ -98,7 +107,6 @@ class Game:
         self.blind_prepped = False
 
         # 手牌等级
-        from .hand_eval import HAND_ORDER
         self.hand_levels = {h: 1 for h in HAND_ORDER}
         self.played_this_ante: List[Card] = []   # 柱 boss 用
         self.hands_played_round = 0
@@ -226,7 +234,6 @@ class Game:
         self.say(f"开始新的一局（{deck_data.DECKS[deck_key]['cn']}）")
 
     def _randomize_deck(self):
-        from .card import RANKS, SUITS
         base = random.Random(self.seed)
         # 随机化每花色牌数（和 = 52）
         counts = [0, 0, 0, 0]
@@ -259,9 +266,8 @@ class Game:
 
     def _get_new_boss(self) -> str:
         """抽取头目盲注：使用次数最少优先，随机。"""
-        from ..data.blinds import BOSS_BLINDS
         candidates = []
-        for key, d in BOSS_BLINDS.items():
+        for key, d in blind_data.BOSS_BLINDS.items():
             if d.get("showdown"):
                 if self.ante % WIN_ANTE == 0 and self.ante >= 2:
                     candidates.append(key)
@@ -272,7 +278,7 @@ class Game:
                     if d["min"] <= self.ante:
                         candidates.append(key)
         if not candidates:
-            candidates = [k for k, d in BOSS_BLINDS.items() if not d.get("showdown")]
+            candidates = [k for k, d in blind_data.BOSS_BLINDS.items() if not d.get("showdown")]
         # 使用次数最少优先
         min_use = min(self.bosses_used.count(c) for c in candidates)
         pool = [c for c in candidates if self.bosses_used.count(c) == min_use]
@@ -324,7 +330,6 @@ class Game:
 
     def round_hand_size(self, blind_key: Optional[str] = None) -> int:
         """本回合的手牌上限（含牌组、小丑与优惠券加成、头目限制）。"""
-        from .effects import joker_hand_size_bonus
         key = blind_key or self.current_blind_key()
         cfg = deck_data.DECKS[self.deck_key]["config"] if self.deck_key else {}
         n = (START_PARAMS["hand_size"] + cfg.get("hand_size", 0)
@@ -418,7 +423,6 @@ class Game:
         self.blind_prepped = False
         self.pending_consumable = None
         # 小丑选盲注触发 + 每轮轮换目标
-        from .effects import on_blind_select
         on_blind_select(self)
         # 手牌上限：牌组/优惠券/小丑加成 + 头目限制。放在 on_blind_select 之后，
         # 乌合之众当场获得的小丑也算入本回合。
@@ -490,7 +494,6 @@ class Game:
         """刚抽到手牌的牌是否保持背面朝下（对应 blind.lua 的 Blind:stay_flipped）。"""
         if self.boss_disabled():
             return False
-        from .effects import is_face_card, roll_prob
         if self.blind_key == "bl_wheel":
             return roll_prob(self, 7, "wheel")
         if self.blind_key == "bl_house" and self.hands_played_round == 0 and self.discards_used_round == 0:
@@ -571,7 +574,6 @@ class Game:
         盲注规则（眼睛/嘴/通灵者）不再阻止出牌，而是让这一手得 0 分，
         因此这里没有回滚分支：牌一旦打出就离手、出牌次数照扣。
         """
-        from .scoring import evaluate_play
         if not self.can_play() or self.round_over():
             self.say("当前回合已经结束")
             return []
@@ -632,7 +634,6 @@ class Game:
         self._round_cards.extend(selected)
         self.discards_left -= 1
         self.say(f"弃掉了 {len(selected)} 张牌")
-        from .effects import on_discard
         on_discard(self, selected)
         # 与 Lua 一致：小丑在 discards_used 递增前判定"首次弃牌"（card.lua 2802 / state_events.lua 437）
         self.discards_used_round += 1
@@ -764,7 +765,6 @@ class Game:
                     self.blind_status[self.blind_on_deck] = "Select"
                 self.blind_key = None
             self._round_income(boss_beaten=boss_beaten, blind_key=completed_blind_key)
-            from .effects import on_end_round
             on_end_round(self, boss_beaten=boss_beaten)
             self.boss_disabled_round = False      # 摔跤手的禁用只作用于本回合
             self._recycle_round_cards()
@@ -865,7 +865,6 @@ class Game:
         self.say("进入商店")
 
     def _generate_shop(self):
-        from ..data import centers as centers_data
         # 【商品】默认两个：随机小丑 / 塔罗 / 星球 / 增强卡牌
         joker_max = self.shop_joker_max
         free_joker_rarity = self.pending_shop_free_joker
@@ -893,7 +892,6 @@ class Game:
         self.last_shop_was_first = True
 
     def _make_joker_for_shop(self, key: str):
-        from ..data import centers as centers_data
         cfg = centers_data.joker_cfg(key)
         j = JokerItem(key=key)
         j.buy_cost = centers_data.joker_price(key, self.dollars)
@@ -919,7 +917,6 @@ class Game:
 
     def _generate_shop_goods(self):
         """生成一件【商品】：随机小丑 / 塔罗 / 星球 / 增强卡牌。"""
-        from ..data import centers as centers_data
         rates = {"joker": 20, "tarot": 4, "planet": 4, "card": 4}
         if "v_tarot_merchant" in self.used_vouchers:
             rates["tarot"] = 4 * 9.6 / 4 * 4
@@ -939,7 +936,6 @@ class Game:
 
     def _make_card_for_shop(self) -> Card:
         """生成一张商店【增强卡牌】：随机点数花色 + 随机增强，可能带版本/蜡封。"""
-        from .card import RANKS, SUITS, ENHANCED
         c = Card(rank=self.rng.choice(RANKS), suit=self.rng.choice(SUITS), uid=0)
         c.enhanced = self.rng.choice(ENHANCED)
         if self.rng.chance(20, "std_ed"):
@@ -1044,7 +1040,6 @@ class Game:
         return True
 
     def redeem_voucher(self, vk: str):
-        from ..data import centers as centers_data
         if vk in self.used_vouchers:
             return
         self.used_vouchers.add(vk)
@@ -1069,7 +1064,6 @@ class Game:
         kind = cfg["kind"]
         n = cfg["pack_size"]
         items = []
-        from ..data import centers as centers_data
         if kind == "tarot":
             for _ in range(n):
                 items.append(ConsumableItem(key=self.rng.choice(list(consumable_data.TAROTS))))
@@ -1093,7 +1087,6 @@ class Game:
         return items
 
     def _random_standard_card(self) -> Card:
-        from .card import RANKS, SUITS, ENHANCED
         c = Card(rank=self.rng.choice(RANKS), suit=self.rng.choice(SUITS), uid=0)
         if self.rng.chance(8, "std_enh"):
             c.enhanced = self.rng.choice(ENHANCED)   # card.py 的无 m_ 前缀键
@@ -1169,7 +1162,6 @@ class Game:
             return False
         if not self.sell_joker(index):
             return False
-        from ..data import centers as centers_data
         item = self.pending_pack["sells"].pop(0)
         self.jokers.append(item)
         self.say(f"放入小丑：{centers_data.joker_cfg(item.key)['cn']}")
@@ -1188,7 +1180,6 @@ class Game:
 
     def shop_closed(self):
         """离开商店：红卡/珀可等结算，随后自动进入下一盲注。"""
-        from .effects import on_shop_closed
         on_shop_closed(self)
         self.temp_reroll_cost = None
         # 进商店时已生效的标签在此消费，避免下次商店重复触发；双重标签与没被商店
@@ -1225,7 +1216,6 @@ class Game:
         if not free:
             self.reroll_cost_increase += 1
         self.rerolls_total += 1
-        from .effects import on_reroll
         on_reroll(self)
         self._generate_shop_jokers_only()
         return True
@@ -1250,7 +1240,6 @@ class Game:
             self.dollars += j.sell_value()
             # 卖出效果必须在移除之前结算：被卖的小丑若是蓝图，它会把 selling_self
             # 转发给自己右侧的小丑（原版 card.lua:1599 的 calculate_joker 语义）。
-            from .effects import on_sell_joker
             on_sell_joker(self, j)
             self.jokers.pop(index)
             self.say("售出小丑牌")
@@ -1267,17 +1256,15 @@ class Game:
         return False
 
     def use_consumable(self, index: int):
-        from .effects import use_consumable as uc
         if 0 <= index < len(self.consumeables):
             c = self.consumeables[index]
-            return uc(self, c)
+            return use_consumable(self, c)
         return None
 
     def finish_consumable_target(self, indices: List[int]) -> str:
         """CLI 选择完目标牌后调用。indices 为手牌下标。"""
-        from .effects import finish_consumable_target as fc
         cards = [self.hand[i] for i in indices if 0 <= i < len(self.hand)]
-        result = fc(self, cards)
+        result = finish_consumable_target(self, cards)
         self.sort_hand()
         return result
 
@@ -1317,8 +1304,7 @@ class Game:
     # 标签应用
     # ------------------------------------------------------------------
     def _apply_tag(self, tag: Tag):
-        from .effects import apply_tag as at
-        at(self, tag)
+        apply_tag(self, tag)
 
     # ------------------------------------------------------------------
     # 小丑工具
@@ -1331,21 +1317,3 @@ class Game:
 
     def has_voucher(self, *keys: str) -> bool:
         return any(k in self.used_vouchers for k in keys)
-
-
-# ----------------------------------------------------------------------
-# 转发（在 effects 中实现，避免循环导入）
-# ----------------------------------------------------------------------
-def _lazy_effects():
-    from .effects import joker_dollar_bonus as f1, joker_cn as f2
-    return f1, f2
-
-
-def joker_dollar_bonus(game, joker) -> int:
-    from .effects import joker_dollar_bonus as f
-    return f(game, joker)
-
-
-def joker_cn(key: str) -> str:
-    from .effects import joker_cn as f
-    return f(key)
