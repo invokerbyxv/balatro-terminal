@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import unittest
 
-from balatro_cli.core.card import Card
+from balatro_cli.core.card import ENHANCED, RANKS, SUITS, Card
 from balatro_cli.core.game import Game
 from balatro_cli.core.hand_eval import evaluate_poker_hand, best_hand
 from balatro_cli.core.items import BoosterPack, ConsumableItem, JokerItem, Tag
@@ -155,6 +155,39 @@ class TestShopAndPacks(unittest.TestCase):
         g.enter_shop()
         self.assertTrue(g.shop_jokers)
         self.assertEqual(len(g.shop_boosters), 2)
+
+    def test_shop_card_slot_generates_and_buys(self):
+        # 回归：_make_card_for_shop 曾漏导入 RANKS/SUITS/ENHANCED，
+        # 商店随机到「增强卡牌」格子时（打出制胜一手后进商店）整局崩溃。
+        g = new_game(seed=3, blind=False)
+        g.enter_shop()
+        card = g._make_card_for_shop()
+        self.assertIsInstance(card, Card)
+        self.assertIn(card.rank, RANKS)
+        self.assertIn(card.suit, SUITS)
+        self.assertIn(card.enhanced, ENHANCED)
+        self.assertGreaterEqual(g.shop_item_price(card), 1)
+        g.shop_jokers = [card]
+        g.dollars = 100
+        self.assertTrue(g.buy_shop_item(0))
+
+    def test_enter_shop_applies_tags(self):
+        # 回归：ConsumableMixin._apply_tag 曾漏导入 effects.apply_tag，
+        # 带着标签进商店（跳过盲注后必然发生）时 NameError 崩整局。
+        # 注意 test_all_tags_apply 直接调 effects.apply_tag，绕过了 mixin，抓不到这类漏导入。
+        g = new_game(seed=3, blind=False)
+        g.dollars = 10
+        g.tags = [Tag(key="tag_economy")]
+        g.enter_shop()                          # 不应抛异常
+        self.assertEqual(g.dollars, 20)         # 经济标签：$10 -> +$10
+
+    def test_shop_close_keeps_only_persistent_tags(self):
+        # 回归：shop_closed 曾漏导入 PERSISTENT_TAGS。
+        g = new_game(seed=3, blind=False)
+        g.enter_shop()
+        g.tags = [Tag("tag_double"), Tag("tag_handy")]
+        g.shop_closed()
+        self.assertEqual([t.key for t in g.tags], ["tag_double"])
 
     def test_reroll_cost_increases(self):
         g = new_game(seed=3, blind=False)

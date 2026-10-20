@@ -39,10 +39,6 @@ WIN_ANTE = 8
 #: 出牌 / 弃牌一次最多 5 张（对应 Lua 的 play/discard 区上限，牌型判定也以此为限）
 MAX_PLAY_SIZE = 5
 
-#: 离开商店时保留的标签：它们的效果要等到后续事件才触发（双重标签等下一个标签、
-#: 版本标签等下一张商店小丑），原版会一直留在收藏里；其余标签进商店即已生效。
-PERSISTENT_TAGS = {"tag_double", "tag_foil", "tag_holo", "tag_polychrome", "tag_negative"}
-
 
 class Game(ShopMixin, PackMixin, ConsumableMixin):
     def __init__(self, seed: Optional[int] = None):

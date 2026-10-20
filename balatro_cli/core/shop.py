@@ -5,13 +5,18 @@
 """
 from __future__ import annotations
 
-from .card import Card
+from .card import Card, ENHANCED, RANKS, SUITS
 from .items import JokerItem, ConsumableItem, BoosterPack
 from .effects import joker_cn, on_reroll, on_sell_joker, on_shop_closed
 from ..data import boosters as booster_data
 from ..data import consumables as consumable_data
 from ..data import vouchers as voucher_data
 from ..data import centers as centers_data
+
+#: 离开商店时保留的标签：它们的效果要等到后续事件才触发（双重标签等下一个标签、
+#: 版本标签等下一张商店小丑），原版会一直留在收藏里；其余标签进商店即已生效。
+#: 放在这里而不是 game.py，避免 shop_closed 运行时再反向导入 game（循环导入）。
+PERSISTENT_TAGS = {"tag_double", "tag_foil", "tag_holo", "tag_polychrome", "tag_negative"}
 
 
 class ShopMixin:

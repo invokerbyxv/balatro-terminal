@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from typing import List
 
-from .items import ConsumableItem
-from .effects import finish_consumable_target, use_consumable
+from .items import ConsumableItem, Tag
+from .effects import apply_tag, finish_consumable_target, use_consumable
 from ..data import consumables as consumable_data
 
 
