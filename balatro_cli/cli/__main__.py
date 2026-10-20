@@ -19,14 +19,15 @@ def main(argv: list[str] | None = None) -> None:
         terminal.force(False)
     elif "--mouse" in args:
         terminal.force(True)
-    # 颜色默认关闭；--color 开启，--no-color 强制关闭，都没给时看环境变量
+    # 颜色默认开启；--no-color 关闭，--color 强制开启，都没给时看环境变量
     if "--color" in args:
         ui.set_color(True)
     elif "--no-color" in args:
         ui.set_color(False)
     else:
+        # 未设置或空值都视为默认开启，只有显式假值才关闭
         ui.set_color(os.environ.get("BALATRO_CLI_COLOR", "").strip().lower()
-                     in ("1", "on", "true", "yes"))
+                     not in ("0", "off", "false", "no"))
     seed = None
     if "-s" in args:
         i = args.index("-s")

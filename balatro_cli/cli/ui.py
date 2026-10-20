@@ -10,7 +10,7 @@ from typing import Callable, List, Optional, Sequence, Tuple
 from . import terminal
 
 # ---------- ANSI 颜色 ----------
-# 颜色默认关闭（终端默认前景色更素净），用 --color 或 BALATRO_CLI_COLOR=1 开启。
+# 颜色默认开启；用 --no-color 或 BALATRO_CLI_COLOR=0 关闭，--color 可强制开启。
 RESET = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
@@ -26,19 +26,19 @@ _COLOR_CODES = {
     "GRAY": "\033[90m",
 }
 
-RED = ""
-GREEN = ""
-YELLOW = ""
-BLUE = ""
-MAGENTA = ""
-CYAN = ""
-GRAY = ""
+RED = _COLOR_CODES["RED"]
+GREEN = _COLOR_CODES["GREEN"]
+YELLOW = _COLOR_CODES["YELLOW"]
+BLUE = _COLOR_CODES["BLUE"]
+MAGENTA = _COLOR_CODES["MAGENTA"]
+CYAN = _COLOR_CODES["CYAN"]
+GRAY = _COLOR_CODES["GRAY"]
 
-_color_on = False
+_color_on = True
 
 
 def set_color(enabled: bool) -> None:
-    """开启 / 关闭彩色输出（默认关闭）。
+    """开启 / 关闭彩色输出（默认开启）。
 
     关闭时所有颜色常量都是空串，:func:`c` 原样返回文本，不会残留转义序列；
     ``BOLD`` / ``DIM`` / ``RESET`` 属于字形样式，不受影响。
