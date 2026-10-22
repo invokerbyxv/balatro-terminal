@@ -223,6 +223,8 @@ class ShopMixin:
 
     def shop_closed(self):
         """离开商店：红卡/珀可等结算，随后自动进入下一盲注。"""
+        # 兜底：卡包还开着就离开商店时，已取走的牌保留，剩余的直接放弃。
+        self.skip_pack()
         on_shop_closed(self)
         self.temp_reroll_cost = None
         # 进商店时已生效的标签在此消费，避免下次商店重复触发；双重标签与没被商店

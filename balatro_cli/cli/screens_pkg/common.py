@@ -18,8 +18,6 @@ class CommonMixin:
         self.game: Optional[Game] = None
         self.state = "menu"
         self.log: List[str] = []
-        self.pack_picked: int = 0
-        self.pack_selection: set[int] = set()
         self.target_needed: Optional[int] = None
         self.target_min: int = 1
         self.return_state: str = "play"
@@ -54,8 +52,6 @@ class CommonMixin:
                     self._shop()
                 elif self.state == "pack":
                     self._pack()
-                elif self.state == "pack_sell":
-                    self._pack_sell()
                 elif self.state == "consume":
                     self._consume()
                 elif self.state == "sell":

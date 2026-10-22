@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from balatro_cli.cli.screens_pkg import App
 from balatro_cli.core.game import Game
-from balatro_cli.core.items import BoosterPack, ConsumableItem, JokerItem
+from balatro_cli.core.items import BoosterPack, ConsumableItem, JokerItem, Tag
 from tests.helpers import new_game
 
 
@@ -70,6 +70,33 @@ class TestScreensRender(unittest.TestCase):
         app.game.shop_boosters = [BoosterPack("p_arcana_normal", 4, 4)]
         app.game.buy_booster(0)
         self.assert_renders(app._pack)
+
+    def test_tag_pack_opens_on_shop_entry(self):
+        # 跳过盲注拿到的「小丑」标签会在进商店时开一个免费卡包，界面应直接进入卡包
+        app = make_app()
+        app.game.tags = [Tag(key="tag_buffoon")]
+        app._enter_shop()
+        self.assertEqual(app.state, "pack")
+        self.assertEqual(app.game.pending_pack["key"], "p_buffoon_mega")
+
+    def test_pack_screen_sells_before_picking(self):
+        app = make_app()
+        g = app.game
+        g.enter_shop()
+        g.dollars = 100
+        g.jokers = [JokerItem("j_joker") for _ in range(g.joker_slots)]
+        g.shop_boosters = [BoosterPack("p_buffoon_normal", 4, 4)]
+        g.buy_booster(0)
+        app.state = "pack"
+        # 小丑栏已满：取牌被拒绝，停在卡包界面（不再进已删除的 pack_sell 状态）
+        self.assert_renders(app._pack, ("1",))
+        self.assertEqual(app.state, "pack")
+        self.assertIsNotNone(g.pending_pack)
+        # 卡包界面可以直接进售卖界面，返回后仍回到卡包
+        self.assert_renders(app._pack, ("s",))
+        self.assertEqual((app.state, app.return_state), ("sell", "pack"))
+        self.assert_renders(app._sell_screen, ("0",))
+        self.assertEqual(app.state, "pack")
 
     def test_round_end_screens(self):
         app = make_app()

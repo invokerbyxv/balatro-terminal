@@ -21,7 +21,8 @@ class ShopMixin:
         self._push_log(g.messages)
         g.messages.clear()
         self.log = []
-        self.state = "shop"
+        # 标签（小丑/塔罗/星球/标准/幻灵包）可能在进商店时就开了一个免费卡包
+        self.state = "pack" if g.pending_pack else "shop"
 
 
     def _shop(self):
@@ -66,8 +67,6 @@ class ShopMixin:
                 self._push_log(g.messages)
                 g.messages.clear()
                 if g.pending_pack:
-                    self.pack_picked = 0
-                    self.pack_selection.clear()
                     self.state = "pack"
         elif cmd == "j":
             self.return_state = "shop"
@@ -117,71 +116,50 @@ class ShopMixin:
             self.state = "shop"
             return
         cfg = pp["cfg"]
-        self._banner(f"卡包 · {cfg['cn']}", f"选择 {pp['choose']} 张（当前 {self.pack_picked}/{pp['choose']}）")
         kind = cfg["kind"]
+        left = g.pack_choices_left()
+        self._banner(f"卡包 · {cfg['cn']}",
+                     f"已选 {pp['picked']}/{pp['choose']} · 还能选 {left} 张")
         for i, item in enumerate(pp["items"]):
             if kind == "buffoon":
-                print(ui.joker_line(i + 1, g, item))
+                line = ui.joker_line(i + 1, g, item)
+                if not g.pack_joker_fits(item):
+                    line += f"  {ui.c('（小丑栏已满，需先出售）', ui.RED)}"
+                print(line)
             elif kind in ("tarot", "planet", "spectral"):
                 print(ui.consumable_line(i + 1, g, item))
             else:
                 print(f"  {ui.c(str(i + 1), ui.CYAN)} {ui.render_card(item)}")
-        print(f"  {ui.c('0', ui.RED)} 跳过")
+        print(f"  {ui.c('小丑', ui.GRAY)} {self._slots(len(g.jokers), g.joker_slots)}   "
+              f"{ui.c('消耗牌', ui.GRAY)} {self._slots(len(g.consumeables), g.consumable_slots)}")
+        if kind == "buffoon" and len(g.jokers) >= g.joker_slots:
+            print(f"  {ui.c('小丑栏已满：先按 s 出售一张现有小丑，再选择卡包小丑', ui.RED)}")
+        self._show_log()
+        print(f"  输入{ui.c('序号', ui.CYAN)}取牌（可多选，如 {ui.c('1 2', ui.CYAN)}）   "
+              f"{ui.c('s', ui.YELLOW)}售卖  {ui.c('j', ui.GREEN)}查看  "
+              f"{ui.c('0', ui.RED)}结束选择（已选的牌保留）")
         cmd = ui.prompt()
         if cmd == "0" or cmd == "quit":
             g.skip_pack()
-            self.pack_selection.clear()
-            self.state = "shop"
-            return
-        self.pack_selection |= self._parse_indices(cmd, len(pp["items"]))
-        remaining = pp["choose"] - len(self.pack_selection)
-        if remaining > 0:
-            self.pack_picked = len(self.pack_selection)
-            self._push_log([f"还需选择 {remaining} 张牌"])
-            return
-        status = g.pack_choose(sorted(self.pack_selection))
-        self._push_log(g.messages)
-        g.messages.clear()
-        if status == "needs_sell":
-            self.pack_picked = 0
-            self.pack_selection.clear()
-            self.state = "pack_sell"
-            return
-        if status == "done":
-            self.pack_picked = 0
-            self.pack_selection.clear()
-            self.state = "shop"
-
-
-    def _pack_sell(self):
-        g = self.game
-        pp = g.pending_pack
-        if not pp or not pp.get("sells"):
-            self.state = "shop"
-            return
-        cfg = pp["cfg"]
-        self._banner(f"卡包 · {cfg['cn']} · 小丑栏已满",
-                     f"还有 {len(pp['sells'])} 张小丑待放入")
-        print("  待放入:")
-        for i, j in enumerate(pp["sells"]):
-            print(" " + ui.joker_line(i + 1, g, j))
-        print()
-        self._jokers()
-        self._show_log()
-        print(f"  输入{ui.c('小丑序号', ui.CYAN)} 出售它腾出空位并放入待选小丑；"
-              f"{ui.c('0', ui.RED)} 放弃待放入的小丑")
-        cmd = ui.prompt()
-        if cmd == "0" or cmd == "quit":
-            g.pack_discard_waiting()
             self._push_log(g.messages)
             g.messages.clear()
             self.state = "shop"
             return
-        idxs = self._parse_indices(cmd, len(g.jokers))
-        if not idxs:
+        if cmd == "s":
+            self.return_state = "pack"
+            self.state = "sell"
             return
-        ok = g.pack_sell_for_waiting(min(idxs))
+        if cmd == "j":
+            self.return_state = "pack"
+            self.state = "items"
+            return
+        idxs = self._parse_indices(cmd, len(pp["items"]))
+        if not idxs:
+            if cmd:
+                self._push_log(["无效的序号"])
+            return
+        status = g.pack_choose(sorted(idxs))
         self._push_log(g.messages)
         g.messages.clear()
-        if ok and not g.pending_pack:
+        if status in ("done", "none"):
             self.state = "shop"

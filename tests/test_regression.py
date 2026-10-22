@@ -216,9 +216,61 @@ class TestShopAndPacks(unittest.TestCase):
         self.assertTrue(g.buy_booster(0))
         self.assertIsNotNone(g.pending_pack)
         status = g.pack_choose([0])
-        self.assertIn(status, ("done", "needs_sell"))
-        if status == "done":
-            self.assertIsNone(g.pending_pack)
+        self.assertEqual(status, "done")
+        self.assertIsNone(g.pending_pack)
+
+
+class TestPackSelection(unittest.TestCase):
+    """补充包取牌：choose 是上限、已取的牌跳过时保留、小丑栏满需先出售。
+
+    对应原版 card.lua 的 G.GAME.pack_choices 与 button_callbacks.lua 的
+    can_select_card / skip_booster。
+    """
+
+    def open_pack(self, key: str):
+        g = new_game(seed=5, blind=False)
+        g.enter_shop()
+        g.dollars = 100
+        g.shop_boosters = [BoosterPack(key=key, cost=8, buy_cost=8)]
+        self.assertTrue(g.buy_booster(0))
+        return g
+
+    def test_mega_pack_may_take_one_then_skip(self):
+        g = self.open_pack("p_buffoon_mega")
+        self.assertEqual(g.pending_pack["choose"], 2)
+        before = len(g.jokers)
+        self.assertEqual(g.pack_choose([0]), "more")
+        self.assertEqual(len(g.jokers), before + 1)
+        self.assertEqual(len(g.pending_pack["items"]), 3)
+        g.skip_pack()
+        self.assertIsNone(g.pending_pack)
+        self.assertEqual(len(g.jokers), before + 1)    # 跳过时已选的小丑保留
+
+    def test_mega_pack_second_pick_closes_pack(self):
+        g = self.open_pack("p_buffoon_mega")
+        self.assertEqual(g.pack_choose([0]), "more")
+        self.assertEqual(g.pack_choose([0]), "done")
+        self.assertIsNone(g.pending_pack)
+        self.assertEqual(g.pack_choices_left(), 0)
+
+    def test_full_joker_slots_block_pack_joker_until_sold(self):
+        g = self.open_pack("p_buffoon_normal")
+        g.jokers = [JokerItem("j_joker") for _ in range(g.joker_slots)]
+        self.assertEqual(g.pack_choose([0]), "no_space")
+        self.assertIsNotNone(g.pending_pack)
+        self.assertEqual([j.key for j in g.jokers], ["j_joker"] * g.joker_slots)
+        self.assertTrue(g.sell_joker(0))
+        self.assertEqual(g.pack_choose([0]), "done")
+        self.assertIsNone(g.pending_pack)
+        self.assertEqual(len(g.jokers), g.joker_slots)
+
+    def test_multiple_jokers_cannot_share_one_slot(self):
+        # 只剩一个空位时一次选两张小丑：只进一张，另一张按栏满拒绝
+        g = self.open_pack("p_buffoon_mega")
+        g.jokers = [JokerItem("j_joker") for _ in range(g.joker_slots - 1)]
+        self.assertEqual(g.pack_choose([0, 1]), "more")
+        self.assertEqual(len(g.jokers), g.joker_slots)
+        self.assertEqual(g.pack_choices_left(), 1)
 
 
 class TestBossDetails(unittest.TestCase):

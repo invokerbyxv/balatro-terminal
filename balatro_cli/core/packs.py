@@ -1,7 +1,14 @@
-"""商店 / 卡包 / 消耗品 / 标签：Game 的功能切片。
+"""卡包：Game 的功能切片。
 
 通过 mixin 组合进 :class:`balatro_cli.core.game.Game`，方法仍以 ``self`` 访问
-同一份游戏状态，外部调用方式不变。拆分的目的是让 game.py 只保留主状态机。
+同一份游戏状态，外部调用方式不变。
+
+取牌规则对齐原版（card.lua ``Card:open`` 的 ``G.GAME.pack_choices`` 与
+functions/button_callbacks.lua 的 ``can_select_card`` / ``skip_booster``）：
+
+* ``choose`` 是**上限**而非配额：取不满也能结束，已取走的牌保留；
+* 每张牌选中即结算并从卡包移除，选满后卡包自动关闭；
+* 小丑栏已满时不能取走小丑，需先在卡包界面里出售一张现有小丑。
 """
 from __future__ import annotations
 
@@ -22,10 +29,10 @@ class PackMixin:
 
     def _open_pack_now(self, pk: str, free: bool = True):
         cfg = booster_data.BOOSTERS[pk]
-        items = self._generate_pack_contents(pk)
-        self.pending_pack = {"key": pk, "cfg": cfg, "items": items,
-                             "choose": cfg["choose"], "free": free,
-                             "next": None}
+        self.pending_pack = {"key": pk, "cfg": cfg,
+                             "items": self._generate_pack_contents(pk),
+                             "choose": cfg["choose"], "picked": 0,
+                             "free": free}
 
     def _generate_pack_contents(self, pk: str) -> list:
         cfg = booster_data.BOOSTERS[pk]
@@ -64,84 +71,92 @@ class PackMixin:
             c.seal = self.rng.choice(["gold", "red", "blue", "purple"])
         return c
 
-    def pack_choose(self, indices: List[int]) -> str:
-        """卡包中挑选。indices 为待选卡包内的下标；必须一次选满 choose 张。"""
+    # ------------------------------------------------------------------
+    # 卡包选择
+    # ------------------------------------------------------------------
+    def pack_choices_left(self) -> int:
+        """当前卡包还能选几张（对应原版 G.GAME.pack_choices）。"""
         if not self.pending_pack:
-            return "none"
+            return 0
         pp = self.pending_pack
-        choose = pp["choose"]
-        unique = []
-        for i in indices:
-            if 0 <= i < len(pp["items"]) and i not in unique:
-                unique.append(i)
-        if len(unique) != choose:
-            self.say(f"该卡包需要选择 {choose} 张牌")
-            return "needs_more"
-        chosen = [pp["items"][i] for i in unique]
+        return max(0, pp["choose"] - pp["picked"])
+
+    def pack_joker_fits(self, item: JokerItem) -> bool:
+        """这张卡包小丑现在能不能取走（原版 can_select_card：栏满只放行负片）。"""
+        return item.negative or len(self.jokers) < self.joker_slots
+
+    def pack_choose(self, indices: List[int]) -> str:
+        """从打开的卡包中取牌，逐张结算，最多取 ``choose`` 张。
+
+        ``indices`` 为卡包内下标（按输入顺序结算）。返回：
+
+        * ``none`` —— 没有打开的卡包；
+        * ``empty`` —— 没有合法序号；
+        * ``no_space`` —— 选中的小丑都因栏位已满没取到（卡包保持打开）；
+        * ``more`` —— 已取到牌，还能继续选；
+        * ``done`` —— 已取到牌且选择次数用尽，卡包已关闭。
+        """
+        pp = self.pending_pack
+        if not pp or pp["picked"] >= pp["choose"]:
+            return "none"
         kind = pp["cfg"]["kind"]
-        for item in chosen:
-            if kind == "tarot":
-                if len(self.consumeables) < self.consumable_slots:
-                    self.consumeables.append(item)
-                else:
-                    self.say("消耗品栏已满，丢弃")
-            elif kind == "planet":
-                if len(self.consumeables) < self.consumable_slots:
-                    self.consumeables.append(item)
-                else:
-                    self.say("消耗品栏已满，丢弃")
-            elif kind == "spectral":
-                if len(self.consumeables) < self.consumable_slots:
-                    self.consumeables.append(item)
-                else:
-                    self.say("消耗品栏已满，丢弃")
-            elif kind == "buffoon":
-                if len(self.jokers) < self.joker_slots or item.negative:
-                    self.jokers.append(item)
-                else:
-                    # 小丑栏已满：暂存，稍后由玩家出售现有小丑腾出空位，或放弃
-                    pp.setdefault("sells", []).append(item)
-            elif kind == "standard":
-                self.hologram_count += 1
+        todo: List[int] = []
+        for i in indices:
+            if 0 <= i < len(pp["items"]) and i not in todo:
+                todo.append(i)
+        if not todo:
+            return "empty"
+        left = pp["choose"] - pp["picked"]
+        if len(todo) > left:
+            self.say(f"该卡包还能选 {left} 张，多余的序号已忽略")
+            todo = todo[:left]
+
+        taken: List[int] = []
+        for i in todo:
+            item = pp["items"][i]
+            # 逐张取走：先取的已进栏，后一张按最新栏位判断，不会一起挤进一个空位
+            if kind == "buffoon" and not self.pack_joker_fits(item):
+                name = centers_data.joker_cfg(item.key)["cn"]
+                self.say(f"{name}：小丑栏已满，请先出售一张小丑再选")
+                continue
+            self._take_pack_item(item, kind)
+            taken.append(i)
+        if not taken:
+            return "no_space"
+
+        done = set(taken)
+        pp["items"] = [it for i, it in enumerate(pp["items"]) if i not in done]
+        pp["picked"] += len(taken)
         if kind == "standard":
-            self.say(f"标准包：{len(chosen)} 张牌加入牌组")
-            for item in chosen:
-                self.deck.add(item)
-                if len(self.hand) < self.hand_size:
-                    self.hand.append(self.deck.cards.pop())
             self.sort_hand()
-        if pp.get("sells"):
-            self.say(f"小丑栏已满：{len(pp['sells'])} 张小丑待放入，请先出售一张现有小丑腾出空位")
-            return "needs_sell"
-        self.pending_pack = None
-        return "done"
+        if pp["picked"] >= pp["choose"] or not pp["items"]:
+            self.pending_pack = None
+            return "done"
+        return "more"
+
+    def _take_pack_item(self, item, kind: str):
+        """把一张卡包牌结算进牌组 / 小丑栏 / 消耗品栏。"""
+        if kind == "buffoon":
+            self.jokers.append(item)
+            self.say(f"获得小丑：{centers_data.joker_cfg(item.key)['cn']}")
+        elif kind == "standard":
+            # 与原版一致：直接进牌组，手牌有空位则顺手抓一张
+            self.deck.add(item)
+            if len(self.hand) < self.hand_size:
+                self.hand.append(self.deck.cards.pop())
+            self.hologram_count += 1
+            self.say(f"标准包：{item.display()} 加入牌组")
+        elif len(self.consumeables) < self.consumable_slots:
+            self.consumeables.append(item)
+            self.say(f"获得消耗牌：{consumable_data.get_consumable_cn(item.key)}")
+        else:
+            self.say(f"消耗品栏已满，丢弃 {consumable_data.get_consumable_cn(item.key)}")
 
     def skip_pack(self):
-        """跳过当前卡包选择。"""
+        """结束当前卡包，已经取走的牌保留（对应原版 skip_booster）。"""
+        pp = self.pending_pack
+        if not pp:
+            return
+        picked = pp["picked"]
         self.pending_pack = None
-
-    def pack_sell_for_waiting(self, index: int) -> bool:
-        """小丑栏满时的补救：出售一张现有小丑（index），随即放入一张待选小丑。
-
-        出售成功并放入则返回 True；放完最后一张待选小丑后清空 pending_pack。
-        出售失败（如永恒小丑）或 index 无效返回 False。
-        """
-        if not self.pending_pack or not self.pending_pack.get("sells"):
-            return False
-        if not self.sell_joker(index):
-            return False
-        item = self.pending_pack["sells"].pop(0)
-        self.jokers.append(item)
-        self.say(f"放入小丑：{centers_data.joker_cfg(item.key)['cn']}")
-        if not self.pending_pack["sells"]:
-            self.pending_pack = None
-        return True
-
-    def pack_discard_waiting(self) -> bool:
-        """放弃放入待选小丑（直接丢弃），并结束当前卡包。"""
-        if not self.pending_pack or not self.pending_pack.get("sells"):
-            return False
-        n = len(self.pending_pack["sells"])
-        self.pending_pack = None
-        self.say(f"放弃 {n} 张待放入的小丑")
-        return True
+        self.say(f"跳过卡包，保留已选的 {picked} 张牌" if picked else "跳过卡包")

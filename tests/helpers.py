@@ -84,8 +84,7 @@ def play_rounds(g: Game, rounds: int) -> None:
         if g.pending_pack:
             if g.pending_pack["choose"] == 1:
                 g.pack_choose([0])
-            else:
-                g.skip_pack()
+            g.skip_pack()          # 取满会自行关闭；没取满的（如 4 选 2）在这里结束
         g.shop_closed()
 
 
