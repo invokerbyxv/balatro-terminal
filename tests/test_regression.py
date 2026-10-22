@@ -315,6 +315,34 @@ class TestHookCoverage(unittest.TestCase):
                 except Exception as exc:   # noqa: BLE001
                     self.fail(f"blueprint->{joker_key} {fn.__name__}: {exc}")
 
+    def test_all_sell_hooks_run(self):
+        from balatro_cli.core import effects
+
+        self.assertTrue(effects._SELL_HOOKS)
+        for joker_key in sorted(effects._SELL_HOOKS):
+            g = new_game(seed=5)
+            g.jokers = [JokerItem(key=joker_key), JokerItem(key="j_joker")]
+            # 隐形小丑只有满轮后才会走复制分支
+            g.jokers[0].stat["invis_rounds"] = 2
+            g.dollars = 20
+            try:
+                effects.on_sell_joker(g, g.jokers[0])
+            except Exception as exc:       # noqa: BLE001
+                self.fail(f"on_sell_joker + {joker_key}: {type(exc).__name__}: {exc}")
+
+    def test_sell_hooks_with_blueprint_forward(self):
+        from balatro_cli.core import effects
+
+        for joker_key in sorted(effects._SELL_HOOKS):
+            g = new_game(seed=5)
+            g.jokers = [JokerItem(key="j_blueprint"), JokerItem(key=joker_key),
+                        JokerItem(key="j_joker")]
+            g.jokers[1].stat["invis_rounds"] = 2
+            try:
+                effects.on_sell_joker(g, g.jokers[0])
+            except Exception as exc:       # noqa: BLE001
+                self.fail(f"blueprint->{joker_key} on_sell_joker: {exc}")
+
     def test_all_tags_apply(self):
         from balatro_cli.data.tags import TAGS
         from balatro_cli.core.effects import apply_tag
@@ -322,6 +350,112 @@ class TestHookCoverage(unittest.TestCase):
             g = new_game(seed=5)
             g.dollars = 20
             apply_tag(g, Tag(key=key))
+
+
+class TestInvisibleJoker(unittest.TestCase):
+    """隐形小丑：两轮后出售复制一张随机小丑（card.lua 2371 / 2934）。"""
+
+    def test_round_counter_and_active(self):
+        from balatro_cli.core import effects
+
+        g = new_game(seed=1)
+        g.jokers = [JokerItem(key="j_invisible")]
+        self.assertEqual(effects.joker_live_effect(g, g.jokers[0]), "0/2")
+        g.chips = g.current_blind_chips()
+        self.assertTrue(g.end_round())
+        self.assertEqual(g.jokers[0].stat["invis_rounds"], 1)
+        self.assertEqual(effects.joker_live_effect(g, g.jokers[0]), "1/2")
+        g.select_blind()
+        g.chips = g.current_blind_chips()
+        self.assertTrue(g.end_round())
+        self.assertEqual(g.jokers[0].stat["invis_rounds"], 2)
+        self.assertEqual(effects.joker_live_effect(g, g.jokers[0]), "可复制")
+
+    def test_sell_before_ready_does_not_copy(self):
+        g = new_game(seed=1)
+        g.jokers = [JokerItem(key="j_invisible"), JokerItem(key="j_joker")]
+        g.jokers[0].stat["invis_rounds"] = 1
+        self.assertTrue(g.sell_joker(0))
+        self.assertEqual([j.key for j in g.jokers], ["j_joker"])
+
+    def test_sell_when_ready_copies_a_random_joker(self):
+        g = new_game(seed=1)
+        g.jokers = [JokerItem(key="j_invisible"),
+                    JokerItem(key="j_joker", stat={"mult": 8})]
+        g.jokers[0].stat["invis_rounds"] = 2
+        self.assertTrue(g.sell_joker(0))
+        self.assertEqual([j.key for j in g.jokers], ["j_joker", "j_joker"])
+        self.assertEqual(g.jokers[1].stat, {"mult": 8})
+        # 累进状态深拷贝：复制品与本体各自成长
+        self.assertIsNot(g.jokers[0].stat, g.jokers[1].stat)
+
+    def test_copy_strips_negative_edition(self):
+        # copy_card 的 strip_edition = chosen.edition.negative：复制负片小丑不带版本
+        g = new_game(seed=1)
+        g.jokers = [JokerItem(key="j_invisible"),
+                    JokerItem(key="j_joker", edition="negative")]
+        g.jokers[0].stat["invis_rounds"] = 2
+        g.sell_joker(0)
+        self.assertIsNone(g.jokers[1].edition)
+
+    def test_copying_another_invisible_resets_counter(self):
+        # card.lua 2385：复制品若是隐形小丑，轮数从 0 重新开始
+        g = new_game(seed=1)
+        g.jokers = [JokerItem(key="j_invisible"), JokerItem(key="j_invisible")]
+        g.jokers[0].stat["invis_rounds"] = 2
+        g.jokers[1].stat["invis_rounds"] = 2
+        g.sell_joker(0)
+        self.assertEqual(g.jokers[1].key, "j_invisible")
+        self.assertEqual(g.jokers[1].stat["invis_rounds"], 0)
+
+    def test_no_other_jokers_does_not_crash(self):
+        g = new_game(seed=1)
+        g.jokers = [JokerItem(key="j_invisible")]
+        g.jokers[0].stat["invis_rounds"] = 2
+        g.sell_joker(0)
+        self.assertEqual(g.jokers, [])
+
+    def test_blueprint_does_not_forward_copy(self):
+        # 卖掉贴着隐形小丑的蓝图：selling_self 被转发，但隐形小丑带蓝图守卫
+        g = new_game(seed=1)
+        g.jokers = [JokerItem(key="j_blueprint"),
+                    JokerItem(key="j_invisible"), JokerItem(key="j_joker")]
+        g.jokers[1].stat["invis_rounds"] = 2
+        g.sell_joker(0)
+        self.assertEqual([j.key for j in g.jokers], ["j_invisible", "j_joker"])
+
+    def test_blueprint_does_not_advance_counter(self):
+        from balatro_cli.core import effects
+
+        g = new_game(seed=1)
+        g.jokers = [JokerItem(key="j_blueprint"), JokerItem(key="j_invisible")]
+        effects.on_end_round(g)
+        # 蓝图转发一次（被守卫挡掉）+ 隐形小丑自身结算一次，共 +1
+        self.assertEqual(g.jokers[1].stat["invis_rounds"], 1)
+
+
+class TestDietCola(unittest.TestCase):
+    """零糖可乐：出售生成一个双重标签（card.lua 2361）。"""
+
+    def test_sell_generates_double_tag(self):
+        g = new_game(seed=1)
+        g.jokers = [JokerItem(key="j_diet_cola")]
+        self.assertTrue(g.sell_joker(0))
+        self.assertEqual([t.key for t in g.tags], ["tag_double"])
+
+    def test_double_tag_copies_next_tag(self):
+        g = new_game(seed=1)
+        g.jokers = [JokerItem(key="j_diet_cola")]
+        g.sell_joker(0)
+        g.add_tag("tag_handy")
+        self.assertEqual([t.key for t in g.tags], ["tag_handy", "tag_handy"])
+
+    def test_blueprint_forwards_sale_effect(self):
+        # 零糖可乐没有蓝图守卫：卖掉贴着它的蓝图同样生成双重标签
+        g = new_game(seed=1)
+        g.jokers = [JokerItem(key="j_blueprint"), JokerItem(key="j_diet_cola")]
+        self.assertTrue(g.sell_joker(0))
+        self.assertEqual([t.key for t in g.tags], ["tag_double"])
 
 
 class TestDeterminism(unittest.TestCase):

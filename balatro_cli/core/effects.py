@@ -116,6 +116,16 @@ def _le_luchador(game, j):
     return "可禁用" if game.current_blind_key() in blind_data.BOSS_BLINDS else "无头目生效"
 
 
+#: 隐形小丑需要的回合数（card.lua 的 config.extra = 2）
+_INVISIBLE_ROUNDS = 2
+
+
+def _le_invisible(game, j):
+    # 对应原版卡面底部的「(当前为 N/2)」，满 2 轮后显示 ACTIVE
+    n = j.stat.get("invis_rounds", 0)
+    return "可复制" if n >= _INVISIBLE_ROUNDS else f"{n}/{_INVISIBLE_ROUNDS}"
+
+
 def _le_blue_joker(game, j):
     return f"+{game.deck.count() * 2}筹码"
 
@@ -176,6 +186,7 @@ _LIVE_EFFECTS = {
     "j_drivers_license": _le_drivers_license, "j_ramen": _le_ramen,
     "j_todo_list": _le_todo_list, "j_ancient": _le_ancient,
     "j_idol": _le_idol, "j_mail": _le_mail, "j_luchador": _le_luchador,
+    "j_invisible": _le_invisible,
     "j_blue_joker": _le_blue_joker, "j_bull": _le_bull, "j_stone": _le_stone,
     "j_banner": _le_banner, "j_abstract": _le_abstract,
     "j_swashbuckler": _le_swashbuckler, "j_bootstraps": _le_bootstraps,
@@ -1114,6 +1125,16 @@ def _er_turtle_bean(game, j, ctx):
     game.change_hand_size(-1, persistent=False)
 
 
+def _er_invisible(game, j, ctx):
+    # card.lua 2934：每轮 +1；满 2 轮后卡面转为 ACTIVE，可以出售复制
+    n = j.stat.get("invis_rounds", 0) + 1
+    j.stat["invis_rounds"] = n
+    if n >= _INVISIBLE_ROUNDS:
+        game.say("隐形小丑：已就绪，出售可复制一张小丑")
+    else:
+        game.say(f"隐形小丑：{n}/{_INVISIBLE_ROUNDS} 轮")
+
+
 #: 原版整个 end_of_round 分支都包在 `elseif not context.blueprint` 里
 _END_ROUND_HOOKS = {
     "j_egg": (_er_egg, False),
@@ -1122,6 +1143,7 @@ _END_ROUND_HOOKS = {
     "j_gros_michel": (_er_gros_michel, False),
     "j_cavendish": (_er_cavendish, False),
     "j_turtle_bean": (_er_turtle_bean, False),
+    "j_invisible": (_er_invisible, False),
 }
 
 _end_round_fx = _make_hook(_END_ROUND_HOOKS)
@@ -1171,14 +1193,55 @@ def on_shop_closed(game):
     _hook_walk(game, HookCtx(), _shop_closed_fx)
 
 
-def _sell_fx(game, j, ctx):
-    # 原版 selling_self：摔跤手没有蓝图守卫，被蓝图转发时照样生效
-    # （零糖可乐、隐形小丑同样挂在这里，本移植尚未实现）。
-    if j.key == "j_luchador":
-        if game.disable_current_blind():
-            game.say("摔跤手：禁用当前头目盲注效果")
-        else:
-            game.say("摔跤手：当前没有可禁用的盲注效果")
+def _sell_luchador(game, j, ctx):
+    # 摔跤手没有蓝图守卫，被蓝图转发时照样生效
+    if game.disable_current_blind():
+        game.say("摔跤手：禁用当前头目盲注效果")
+    else:
+        game.say("摔跤手：当前没有可禁用的盲注效果")
+
+
+def _sell_diet_cola(game, j, ctx):
+    # 零糖可乐没有蓝图守卫：蓝图贴着它被转发时同样生成双重标签
+    game.say("零糖可乐：生成双重标签")
+    game.add_tag("tag_double")
+
+
+def _sell_invisible(game, j, ctx):
+    # card.lua 2371：满 2 轮后出售，随机复制另一张小丑
+    n = j.stat.get("invis_rounds", 0)
+    if n < _INVISIBLE_ROUNDS:
+        game.say(f"隐形小丑：还需 {_INVISIBLE_ROUNDS - n} 轮才能复制")
+        return
+    others = [x for x in game.jokers if x is not j]
+    if not others:
+        game.say("隐形小丑：没有其他小丑可以复制")
+        return
+    # 容量检查在原版里是 `#G.jokers.cards <= card_limit`：此时被卖的小丑
+    # 还在栏位里，它让出的那一格正好给复制品。
+    if len(game.jokers) > game.joker_slots:
+        game.say("隐形小丑：小丑栏位已满")
+        return
+    chosen = game.rng.choice(others, "invisible")
+    # copy_card 的第 5 个参数 strip_edition = chosen.edition and chosen.edition.negative：
+    # 复制负片小丑时，复制品不带版本。
+    new_joker = chosen.copy(strip_edition=chosen.negative)
+    # card.lua 2385：复制到的是隐形小丑时，复制品的轮数从 0 重新开始
+    if "invis_rounds" in new_joker.stat:
+        new_joker.stat["invis_rounds"] = 0
+    game.jokers.append(new_joker)
+    game.say(f"隐形小丑：复制了 {joker_cn(chosen.key)}")
+
+
+#: 原版 selling_self 分支：摔跤手与零糖可乐没有蓝图守卫，
+#: 隐形小丑带 `not context.blueprint`。
+_SELL_HOOKS = {
+    "j_luchador": (_sell_luchador, True),
+    "j_diet_cola": (_sell_diet_cola, True),
+    "j_invisible": (_sell_invisible, False),
+}
+
+_sell_fx = _make_hook(_SELL_HOOKS)
 
 
 def on_sell_joker(game, sold):
@@ -1186,7 +1249,8 @@ def on_sell_joker(game, sold):
 
     原版是 ``sold:calculate_joker{selling_self = true}``：只有被卖的那张小丑
     收到 context，但蓝图会把它转发给自己右侧的小丑——所以卖掉贴着摔跤手的
-    蓝图同样能禁用当前头目盲注。
+    蓝图同样能禁用当前头目盲注、卖掉贴着零糖可乐的蓝图同样能拿到双重标签，
+    而隐形小丑带蓝图守卫，转发不会触发复制。
     """
     _hook_one(game, sold, HookCtx(), _sell_fx)
 

@@ -3,6 +3,7 @@
 对应 Lua card.lua 的 Card object 中非"扑克牌"的部分（ability、edition 等）。
 """
 from __future__ import annotations
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -40,6 +41,28 @@ class JokerItem:
         if self.rental:
             v = max(1, v - 1)
         return max(1, v)
+
+    def copy(self, *, strip_edition: bool = False) -> "JokerItem":
+        """复制一张小丑（对应 common_events.lua 的 ``copy_card``）。
+
+        累进状态（``stat``）深拷贝，复制品与本体各自独立成长；贴纸同样随卡
+        复制。``strip_edition`` 对应 ``copy_card`` 的第 5 个参数：隐形小丑
+        复制负片小丑时会传 true，让复制品不带任何版本。
+        """
+        return JokerItem(
+            key=self.key,
+            edition=None if strip_edition else self.edition,
+            eternal=self.eternal,
+            perishable=self.perishable,
+            rental=self.rental,
+            perish_tally=self.perish_tally,
+            debuffed=self.debuffed,
+            stat=deepcopy(self.stat),
+            sell_price=self.sell_price,
+            buy_cost=self.buy_cost,
+            couponed=self.couponed,
+            disabled_round=self.disabled_round,
+        )
 
 
 @dataclass
