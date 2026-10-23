@@ -217,6 +217,10 @@ def prob_text(game, text: str) -> str:
 def joker_line(idx: int, game, j) -> str:
     from ..data import centers as cd
     from ..core.card import EDITION_CN
+    if j.face_down:
+        # 琥珀橡果翻转的小丑牌只露出牌背：名称 / 稀有度 / 效果 / 累计状态全部隐藏，
+        # 卖价与原版一样显示为 ?（Card:flip 后 sell_cost_label 变成 '?'）
+        return f"{idx}. {c('？？？', GRAY)} {c('$?', GRAY)}"
     cfg = cd.joker_cfg(j.key)
     extra = ""
     if j.edition:

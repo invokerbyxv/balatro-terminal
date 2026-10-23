@@ -412,6 +412,12 @@ class Game(ShopMixin, PackMixin, ConsumableMixin):
         # 所以标志由 end_round / skip_blind 在回合结束时清掉。
         self.blind_prepped = False
         self.pending_consumable = None
+        # 新盲注从小丑正面朝上开始，再施加这个头目的一次性效果。对应 blind.lua：
+        # set_blind 里的头目效果先于小丑的 setting_blind 触发，所以乌合之众当场
+        # 拿到的小丑保持正面，也不参与这次洗乱。
+        self._unflip_jokers()
+        if key == "bl_final_acorn" and not self.boss_disabled():
+            self._flip_and_shuffle_jokers()
         # 小丑选盲注触发 + 每轮轮换目标
         on_blind_select(self)
         # 手牌上限：牌组/优惠券/小丑加成 + 头目限制。放在 on_blind_select 之后，
@@ -445,6 +451,25 @@ class Game(ShopMixin, PackMixin, ConsumableMixin):
                 c.debuffed = True
             if id(c) in played_ids:
                 c.debuffed = True
+
+    def _flip_and_shuffle_jokers(self):
+        """琥珀橡果：翻转并洗乱所有小丑牌（blind.lua 190-205）。
+
+        翻转只影响显示（被翻转的小丑照常计分），洗乱则实打实地改变顺序——小丑的
+        先后决定计分顺序。原版连洗三次只是动画，这里按需求随机打乱一次。
+        """
+        if not self.jokers:
+            return
+        for j in self.jokers:
+            j.face_down = True
+        if len(self.jokers) > 1:
+            self.rng.shuffle(self.jokers)
+        self.say("琥珀橡果：翻转并洗乱了所有小丑牌")
+
+    def _unflip_jokers(self):
+        """把小丑翻回正面（blind.lua 的 Blind:defeat / Blind:disable）。"""
+        for j in self.jokers:
+            j.face_down = False
 
     def _voucher_bonus(self, what: str) -> int:
         n = 0
@@ -670,6 +695,8 @@ class Game(ShopMixin, PackMixin, ConsumableMixin):
         for c in self.hand + self.play:
             c.debuffed = False
             c.face_down = False
+        # 琥珀橡果翻转的小丑也翻回正面（Blind:disable 的同名分支）
+        self._unflip_jokers()
         key = self.current_blind_key()
         if self.blind_key:
             # 已经用掉的次数不回退，只把头目扣掉的那部分补回来（对应 ease_hands_played(hands_sub)
@@ -763,6 +790,7 @@ class Game(ShopMixin, PackMixin, ConsumableMixin):
                     self.blind_on_deck = order[idx + 1]
                     self.blind_status[self.blind_on_deck] = "Select"
                 self.blind_key = None
+            self._unflip_jokers()                 # 琥珀橡果：头目被击败，小丑翻回正面
             self._round_income(boss_beaten=boss_beaten, blind_key=completed_blind_key)
             on_end_round(self, boss_beaten=boss_beaten)
             self.boss_disabled_round = False      # 摔跤手的禁用只作用于本回合
@@ -774,6 +802,7 @@ class Game(ShopMixin, PackMixin, ConsumableMixin):
         self.say("未能达到盲注目标，" + ("无尽模式结束。" if self.endless else "游戏结束。"))
         self.boss_disabled_round = False
         self.temp_hand_size = 0
+        self._unflip_jokers()
         self._recycle_round_cards()
         return False
 

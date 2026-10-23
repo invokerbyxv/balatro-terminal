@@ -247,6 +247,19 @@ class TestScreensRender(unittest.TestCase):
         self.assertNotIn("计分牌", out)
         self.assertIn("⚠ 通灵者", out)
 
+    def test_flipped_jokers_are_hidden(self):
+        """琥珀橡果：翻转的小丑只显示 ？？？，名称与效果都不泄露，仍可按序号出售。"""
+        app = make_app()
+        g = app.game
+        g.jokers = [JokerItem("j_greedy_joker")]
+        g.jokers[0].face_down = True
+        out = plain(self.assert_renders(app._items))
+        self.assertIn("？？？", out)
+        self.assertNotIn("贪婪小丑", out)
+        out = plain(self.assert_renders(app._sell_screen))
+        self.assertIn("？？？", out)
+        self.assertNotIn("贪婪小丑", out)
+
     def test_parse_indices(self):
         app = make_app()
         self.assertEqual(app._parse_indices("1 3 5", 8), {0, 2, 4})

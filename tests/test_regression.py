@@ -175,6 +175,64 @@ class TestBlindsAndEconomy(unittest.TestCase):
         self.assertGreater(g.current_blind_chips(), small)
 
 
+class TestAmberAcorn(unittest.TestCase):
+    """决战头目「琥珀橡果」：翻转并洗乱所有小丑牌（blind.lua 190-205）。"""
+
+    def acorn_game(self) -> Game:
+        g = new_game(seed=1, blind=False)
+        g.ante, g.boss_key, g.blind_on_deck = 8, "bl_final_acorn", "Boss"
+        g.jokers = [JokerItem(key=k) for k in ("j_joker", "j_greedy_joker", "j_blue_joker")]
+        return g
+
+    def test_flips_jokers_and_shuffles_once(self):
+        g = self.acorn_game()
+        before = [id(j) for j in g.jokers]
+        calls = []
+
+        def fake_shuffle(seq):
+            calls.append(list(seq))
+            seq.reverse()
+
+        g.rng.shuffle = fake_shuffle
+        g.select_blind()
+        self.assertEqual(g.blind_key, "bl_final_acorn")
+        self.assertTrue(all(j.face_down for j in g.jokers))
+        self.assertEqual(len(calls), 1)                      # 只洗乱一次
+        self.assertEqual([id(j) for j in g.jokers], before[::-1])
+
+    def test_round_end_flips_jokers_back(self):
+        g = self.acorn_game()
+        g.select_blind()
+        self.assertTrue(any(j.face_down for j in g.jokers))
+        g.chips = g.current_blind_chips()
+        g.end_round()
+        self.assertFalse(any(j.face_down for j in g.jokers))
+
+    def test_disabled_blind_flips_jokers_back(self):
+        g = self.acorn_game()
+        g.jokers.append(JokerItem(key="j_luchador"))
+        g.select_blind()
+        self.assertTrue(any(j.face_down for j in g.jokers))
+        idx = next(i for i, j in enumerate(g.jokers) if j.key == "j_luchador")
+        g.sell_joker(idx)                        # 摔跤手：禁用当前头目盲注
+        self.assertFalse(any(j.face_down for j in g.jokers))
+
+    def test_chicot_disables_the_effect(self):
+        g = self.acorn_game()
+        g.jokers.append(JokerItem(key="j_chicot"))
+        g.select_blind()
+        self.assertFalse(any(j.face_down for j in g.jokers))
+
+    def test_flipped_jokers_still_score(self):
+        """翻转只隐藏牌面，小丑效果照常生效（原版 Card:flip 不改变 ability）。"""
+        g = self.acorn_game()
+        g.select_blind()
+        set_hand(g, ["A-S", "A-H", "K-S", "K-H", "2-C", "3-D", "4-S", "5-H"])
+        select_cards(g, 5)                        # A,A,K,K,2 → 两对，基础 124 分
+        g.play_selected()
+        self.assertGreater(g.chips, 124)          # 三张小丑仍在计分
+
+
 class TestBlockedPlay(unittest.TestCase):
     def test_psychic_requires_five(self):
         g = new_game(seed=1)

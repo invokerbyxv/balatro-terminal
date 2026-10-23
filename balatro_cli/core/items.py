@@ -26,6 +26,8 @@ class JokerItem:
     couponed: bool = field(default=False)
     # 标签临时禁用（深红之心）
     disabled_round: bool = field(default=False)
+    # 翻转（琥珀橡果）：只影响显示，效果照常生效；卖价与原版一样显示为 ?
+    face_down: bool = field(default=False)
 
     @property
     def negative(self) -> bool:
@@ -48,6 +50,9 @@ class JokerItem:
         累进状态（``stat``）深拷贝，复制品与本体各自独立成长；贴纸同样随卡
         复制。``strip_edition`` 对应 ``copy_card`` 的第 5 个参数：隐形小丑
         复制负片小丑时会传 true，让复制品不带任何版本。
+
+        翻转状态（``face_down``）不复制：原版 ``copy_card`` 不复制 ``facing``，
+        复制品总是正面朝上。
         """
         return JokerItem(
             key=self.key,
