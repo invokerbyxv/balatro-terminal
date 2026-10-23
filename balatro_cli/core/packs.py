@@ -8,7 +8,9 @@ functions/button_callbacks.lua 的 ``can_select_card`` / ``skip_booster``）：
 
 * ``choose`` 是**上限**而非配额：取不满也能结束，已取走的牌保留；
 * 每张牌选中即结算并从卡包移除，选满后卡包自动关闭；
-* 小丑栏已满时不能取走小丑，需先在卡包界面里出售一张现有小丑。
+* 小丑栏已满时不能取走小丑，需先在卡包界面里出售一张现有小丑；
+* 同一个卡包内不出现重复的塔罗 / 星球 / 幻灵 / 小丑牌（见
+  :meth:`Game._draw_pack_keys` 的说明）。
 """
 from __future__ import annotations
 
@@ -39,18 +41,17 @@ class PackMixin:
         kind = cfg["kind"]
         n = cfg["pack_size"]
         items = []
-        if kind == "tarot":
-            for _ in range(n):
-                items.append(ConsumableItem(key=self.rng.choice(list(consumable_data.TAROTS))))
-        elif kind == "planet":
-            for _ in range(n):
-                items.append(ConsumableItem(key=self.rng.choice(list(consumable_data.PLANETS))))
-        elif kind == "spectral":
-            for _ in range(n):
-                items.append(ConsumableItem(key=self.rng.choice(list(consumable_data.SPECTRALS))))
+        if kind in ("tarot", "planet", "spectral"):
+            pool = {"tarot": consumable_data.TAROTS,
+                    "planet": consumable_data.PLANETS,
+                    "spectral": consumable_data.SPECTRALS}[kind]
+            for key in self._draw_pack_keys(pool, n):
+                items.append(ConsumableItem(key=key))
         elif kind == "buffoon":
+            drawn = set()
             for _ in range(n):
-                key = centers_data.random_joker_key(self)
+                key = centers_data.random_joker_key(self, exclude=drawn)
+                drawn.add(key)
                 j = JokerItem(key=key)
                 cfgj = centers_data.joker_cfg(key)
                 j.buy_cost = cfgj["cost"]
@@ -60,6 +61,23 @@ class PackMixin:
             for _ in range(n):
                 items.append(self._random_standard_card())
         return items
+
+    def _draw_pack_keys(self, pool, n: int) -> List[str]:
+        """从卡池无放回地抽 ``n`` 张，保证同一个卡包内不出现重复的牌。
+
+        镜像原版：``create_card`` 每造出一张牌，``Card:set_ability`` 就把它的
+        key 写进 ``G.GAME.used_jokers``；随后 ``get_current_pool`` 会把已出现
+        的 key 从卡池里剔除（没有「表演者」小丑时）。所以同一个卡包里连续
+        ``create_card`` 抽到的一定是不同种类的塔罗 / 星球 / 幻灵 / 小丑牌。
+
+        卡池不足 ``n`` 张时允许重复（原版此时会回退到兜底牌，这里保持发牌数
+        不变）——现有卡池都远大于包容量，这条分支只是防御。
+        """
+        keys = list(pool)
+        picked = self.rng.sample(keys, min(n, len(keys)))
+        while len(picked) < n:
+            picked.append(self.rng.choice(keys))
+        return picked
 
     def _random_standard_card(self) -> Card:
         c = Card(rank=self.rng.choice(RANKS), suit=self.rng.choice(SUITS), uid=0)

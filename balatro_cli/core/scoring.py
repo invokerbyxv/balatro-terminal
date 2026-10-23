@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from .card import Card
 from .hand_eval import evaluate_poker_hand, hand_level_stats, is_royal_flush, HAND_CN
@@ -136,6 +136,30 @@ def held_card_effect(game, card: Card) -> tuple:
 # ----------------------------------------------------------------------
 # 主管线
 # ----------------------------------------------------------------------
+def evaluate_hand(game, cards: List[Card]) -> Tuple[str, List[Card]]:
+    """按当前小丑修正（四根手指 / 捷径 / 涂抹）判定牌型，返回 (名称, 记分牌)。"""
+    return evaluate_poker_hand(
+        cards,
+        four_fingers=game.any_joker("j_four_fingers"),
+        shortcut=game.any_joker("j_shortcut"),
+        smeared=game.any_joker("j_smeared"),
+    )
+
+
+def add_extra_scoring_cards(game, played: List[Card], scoring_hand: List[Card]) -> List[Card]:
+    """补齐额外记分牌（石头牌总是记分；Splash 让打出的牌全部记分）。
+
+    出牌结算与界面预览共用这套规则，避免两边对「哪些牌计分」给出不同答案。
+    """
+    extra = []
+    for c in played:
+        if c.enhanced == "stone" and c not in scoring_hand:
+            extra.append(c)
+    if game.any_joker("j_splash"):
+        extra = [c for c in played if c not in scoring_hand]
+    return scoring_hand + [c for c in extra if c not in scoring_hand]
+
+
 def evaluate_play(game) -> List[str]:
     """结算打出的手牌。返回展示消息列表。"""
     from .joker_fx import calculate_joker
@@ -144,12 +168,7 @@ def evaluate_play(game) -> List[str]:
     played = game.play[:]
 
     # Step 1: 判定手牌
-    name, scoring_hand = evaluate_poker_hand(
-        played,
-        four_fingers=game.any_joker("j_four_fingers"),
-        shortcut=game.any_joker("j_shortcut"),
-        smeared=game.any_joker("j_smeared"),
-    )
+    name, scoring_hand = evaluate_hand(game, played)
     display_name = "皇家同花顺" if is_royal_flush(name, scoring_hand) else HAND_CN.get(name, name)
     boss_disabled = game.boss_disabled()
 
@@ -169,13 +188,7 @@ def evaluate_play(game) -> List[str]:
         return msgs
 
     # Step 2: 额外记分牌（石头牌总是记分；Splash 所有牌都记分）
-    extra = []
-    for c in played:
-        if c.enhanced == "stone" and c not in scoring_hand:
-            extra.append(c)
-    if game.any_joker("j_splash"):
-        extra = [c for c in played if c not in scoring_hand]
-    scoring_hand = scoring_hand + [c for c in extra if c not in scoring_hand]
+    scoring_hand = add_extra_scoring_cards(game, played, scoring_hand)
 
     # Step 4: 基础数值
     mult, hand_chips = hand_level_stats(name, game.hand_levels[name])
@@ -400,13 +413,7 @@ def format_formula(bd, display_name, hand_chips, mult, final_score) -> str:
 
 def _hand_name(game, cards: List[Card]) -> str:
     """按当前小丑（四根手指/捷径/涂抹）判定这组牌的牌型名。"""
-    name, _ = evaluate_poker_hand(
-        cards,
-        four_fingers=game.any_joker("j_four_fingers"),
-        shortcut=game.any_joker("j_shortcut"),
-        smeared=game.any_joker("j_smeared"),
-    )
-    return name
+    return evaluate_hand(game, cards)[0]
 
 
 def blocked_play_reason(game, cards: List[Card]) -> Optional[str]:

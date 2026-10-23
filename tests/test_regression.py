@@ -6,14 +6,27 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 
 from balatro_cli.core.card import ENHANCED, RANKS, SUITS, Card
 from balatro_cli.core.game import Game
 from balatro_cli.core.hand_eval import evaluate_poker_hand, best_hand
 from balatro_cli.core.items import BoosterPack, ConsumableItem, JokerItem, Tag
-from balatro_cli.core.scoring import card_edition, evaluate_play, blocked_play_reason
+from balatro_cli.core.scoring import (add_extra_scoring_cards, card_edition, evaluate_hand,
+                                      evaluate_play, blocked_play_reason)
+from balatro_cli.data.boosters import BOOSTERS
 from tests.helpers import (cards, greedy_play, new_game, play_rounds, select_cards,
                            select_rank, set_hand, snapshot)
+
+
+class _FixedRng:
+    """固定返回值的 RNG 桩：用来断言概率阈值的边界。"""
+
+    def __init__(self, value: float):
+        self.value = value
+
+    def roll(self, label: str = "") -> float:
+        return self.value
 
 
 class TestHandEvaluation(unittest.TestCase):
@@ -39,6 +52,18 @@ class TestHandEvaluation(unittest.TestCase):
         self.check(["J-S", "Q-H", "K-C", "A-D", "9-S"], "High Card")
         self.check(["J-S", "Q-H", "K-C", "A-D", "9-S"], "Straight", shortcut=True)
 
+    def test_three_of_kind_is_not_full_house(self):
+        # 回归：派生链曾把三条的前两张当成对子，导致三条被误判成葫芦
+        name, scoring = evaluate_poker_hand(cards("A-S", "A-H", "A-C", "K-S", "Q-H"))
+        self.assertEqual(name, "Three of a Kind")
+        self.assertEqual([c.rank for c in scoring], ["A", "A", "A"])
+
+    def test_full_house_scores_pair_too(self):
+        # 葫芦的记分牌是「三条 + 对子」，两对都要计入
+        name, scoring = evaluate_poker_hand(cards("A-S", "A-H", "Q-S", "Q-H", "Q-C"))
+        self.assertEqual(name, "Full House")
+        self.assertEqual(sorted(c.rank for c in scoring), ["A", "A", "Q", "Q", "Q"])
+
     def test_best_hand_preview(self):
         hand = cards("A-S", "A-H", "K-S", "K-H", "Q-S", "Q-H", "2-C")
         name, _ = best_hand(hand)
@@ -63,6 +88,28 @@ class TestScoring(unittest.TestCase):
         select_cards(g, 5)
         g.play_selected()
         self.assertEqual(g.chips, 186)     # 124 × 1.5
+
+    def test_scoring_hand_includes_stone_and_splash(self):
+        """预览用的记分牌集合与结算一致：石头牌总记分，飞溅让打出的牌全记分。"""
+        g = new_game(seed=7)
+        stone = Card(rank="2", suit="C", enhanced="stone")
+        played = cards("A-S", "A-H", "K-S") + [stone]
+        name, base = evaluate_hand(g, played)
+        self.assertEqual(name, "Pair")
+        self.assertNotIn(stone, base)
+        self.assertIn(stone, add_extra_scoring_cards(g, played, base))
+
+        g.jokers.append(JokerItem(key="j_splash"))
+        splash = add_extra_scoring_cards(g, played, base)
+        self.assertEqual({id(c) for c in splash}, {id(c) for c in played})
+
+    def test_full_house_score_counts_pair(self):
+        g = new_game(seed=7)
+        set_hand(g, ["A-S", "A-H", "Q-S", "Q-H", "Q-C", "2-D", "3-D", "4-D"])
+        select_cards(g, 5)
+        g.play_selected()
+        # 葫芦基础 40 筹码 + QQQ(10×3) + AA(11×2) = 40 + 52 = 92，×4 = 368
+        self.assertEqual(g.chips, 368)
 
     def test_hand_level_applies(self):
         g = new_game(seed=7)
@@ -271,6 +318,43 @@ class TestPackSelection(unittest.TestCase):
         self.assertEqual(g.pack_choose([0, 1]), "more")
         self.assertEqual(len(g.jokers), g.joker_slots)
         self.assertEqual(g.pack_choices_left(), 1)
+
+
+class TestPackContents(unittest.TestCase):
+    """补充包内容：同一个包内不出现重复的塔罗 / 星球 / 幻灵 / 小丑牌。
+
+    原版 create_card 每造一张牌就把 key 写进 G.GAME.used_jokers，随后
+    get_current_pool 会把它从卡池里剔除（没有「表演者」时），所以同一个包里
+    不会抽到两张一样的牌。标准包走 G.P_CARDS 单独随机，仍允许同点数同花色。
+    """
+
+    def contents(self, key: str, seed: int):
+        g = new_game(seed=seed, blind=False)
+        return [it.key for it in g._generate_pack_contents(key)]
+
+    def test_consumable_packs_never_repeat(self):
+        for key in ("p_celestial_normal", "p_celestial_jumbo", "p_celestial_mega",
+                    "p_arcana_normal", "p_arcana_mega", "p_spectral_mega"):
+            size = BOOSTERS[key]["pack_size"]
+            for seed in range(60):
+                keys = self.contents(key, seed)
+                self.assertEqual(len(keys), size, key)
+                self.assertEqual(len(set(keys)), size, f"{key} seed={seed}: {keys}")
+
+    def test_buffoon_packs_never_repeat(self):
+        for key in ("p_buffoon_normal", "p_buffoon_jumbo", "p_buffoon_mega"):
+            size = BOOSTERS[key]["pack_size"]
+            for seed in range(60):
+                keys = self.contents(key, seed)
+                self.assertEqual(len(keys), size, key)
+                self.assertEqual(len(set(keys)), size, f"{key} seed={seed}: {keys}")
+
+    def test_pack_contents_follow_seed(self):
+        # 同一种子同内容（整局可复现），不同种子内容不同
+        self.assertEqual(self.contents("p_celestial_mega", 1234),
+                         self.contents("p_celestial_mega", 1234))
+        self.assertNotEqual(self.contents("p_celestial_mega", 1234),
+                            self.contents("p_celestial_mega", 4321))
 
 
 class TestBossDetails(unittest.TestCase):
@@ -538,6 +622,8 @@ class TestConsumables(unittest.TestCase):
         from balatro_cli.data.consumables import ALL_CONSUMABLES
         for key in ALL_CONSUMABLES:
             g = new_game(seed=5)
+            # 备一张无版本小丑：命运之轮 / 灵质 / 诅咒 / 安卡 都要有小丑可作用
+            g.jokers.append(JokerItem(key="j_joker"))
             g.consumeables.append(ConsumableItem(key=key))
             status = g.use_consumable(0)
             if status == "needs_target":
@@ -551,6 +637,112 @@ class TestConsumables(unittest.TestCase):
         g.consumeables.append(ConsumableItem(key="c_mercury"))
         g.use_consumable(0)
         self.assertEqual(g.hand_levels["Pair"], 2)
+
+    def test_wheel_of_fortune_only_targets_editionless_jokers(self):
+        """回归：命运之轮不作用于已有版本的小丑。
+
+        对应 card.lua 4209-4216 的 ``eligible_strength_jokers``——候选池只收
+        没有版本的小丑，所以负片 / 全息等小丑的版本不会被改写。
+        """
+        for seed in range(10):
+            g = new_game(seed=seed)
+            holo = JokerItem(key="j_joker", edition="holo")
+            neg = JokerItem(key="j_joker", edition="negative")
+            plain = JokerItem(key="j_joker")
+            g.jokers.extend([holo, neg, plain])
+            for _ in range(200):                  # 1/4 概率：迟早会命中一次
+                if plain.edition is not None:
+                    break
+                g.consumeables.append(ConsumableItem(key="c_wheel_of_fortune"))
+                g.use_consumable(len(g.consumeables) - 1)
+            self.assertIn(plain.edition, ("foil", "holo", "polychrome"), seed)
+            self.assertEqual(holo.edition, "holo", seed)
+            self.assertEqual(neg.edition, "negative", seed)
+
+    def test_wheel_of_fortune_kept_when_no_editionless_joker(self):
+        """所有小丑都带版本时不消耗这张塔罗（原版由 can_use_consumeable 禁用）。"""
+        g = new_game(seed=5)
+        g.jokers.extend([JokerItem(key="j_joker", edition="foil"),
+                         JokerItem(key="j_joker", edition="negative")])
+        item = ConsumableItem(key="c_wheel_of_fortune")
+        g.consumeables.append(item)
+        self.assertEqual(g.use_consumable(0), "invalid")
+        self.assertIn(item, g.consumeables)
+        self.assertEqual([j.edition for j in g.jokers], ["foil", "negative"])
+
+    def test_wheel_of_fortune_without_jokers_is_kept(self):
+        g = new_game(seed=5)
+        item = ConsumableItem(key="c_wheel_of_fortune")
+        g.consumeables.append(item)
+        self.assertEqual(g.use_consumable(0), "invalid")
+        self.assertIn(item, g.consumeables)
+
+    def test_guaranteed_edition_is_weighted(self):
+        """命中后的版本分布：箔片 50% / 全息 35% / 彩绘 15%（card.lua 1484 / 1195）。"""
+        from balatro_cli.core.lookup import guaranteed_edition
+        cases = {0.10: "foil", 0.4999: "foil", 0.5001: "holo",
+                 0.8499: "holo", 0.8501: "polychrome", 0.99: "polychrome"}
+        for roll, want in cases.items():
+            game = SimpleNamespace(rng=_FixedRng(roll))
+            self.assertEqual(guaranteed_edition(game), want, roll)
+
+    def test_guaranteed_edition_distribution(self):
+        from collections import Counter
+        from balatro_cli.core.lookup import guaranteed_edition
+        g = new_game(seed=3, blind=False)
+        counts = Counter(guaranteed_edition(g) for _ in range(4000))
+        self.assertEqual(set(counts), {"foil", "holo", "polychrome"})   # 永不出负片
+        self.assertAlmostEqual(counts["foil"] / 4000, 0.50, delta=0.03)
+        self.assertAlmostEqual(counts["holo"] / 4000, 0.35, delta=0.03)
+        self.assertAlmostEqual(counts["polychrome"] / 4000, 0.15, delta=0.03)
+
+    def test_hex_and_ectoplasm_stick_to_editionless_jokers(self):
+        """诅咒 / 灵质同样只作用于没有版本的小丑（card.lua 4217-4224）。"""
+        for key, edition in (("c_hex", "polychrome"), ("c_ectoplasm", "negative")):
+            g = new_game(seed=5)
+            holo = JokerItem(key="j_joker", edition="holo")
+            plain = JokerItem(key="j_joker")
+            g.jokers.extend([holo, plain])
+            g.consumeables.append(ConsumableItem(key=key))
+            self.assertEqual(g.use_consumable(0), "done", key)
+            self.assertEqual(plain.edition, edition, key)
+            self.assertEqual(holo.edition, "holo", key)
+
+    def test_hex_and_ectoplasm_kept_when_all_jokers_have_editions(self):
+        for key in ("c_hex", "c_ectoplasm"):
+            g = new_game(seed=5)
+            g.jokers.extend([JokerItem(key="j_joker", edition="foil"),
+                             JokerItem(key="j_joker", edition="negative")])
+            hand_size = g.hand_size
+            item = ConsumableItem(key=key)
+            g.consumeables.append(item)
+            self.assertEqual(g.use_consumable(0), "invalid", key)
+            self.assertIn(item, g.consumeables, key)
+            self.assertEqual([j.edition for j in g.jokers], ["foil", "negative"], key)
+            self.assertEqual(g.hand_size, hand_size, key)   # 灵质不扣手牌上限
+
+    def test_aura_rejects_target_with_edition(self):
+        g = new_game(seed=5)
+        set_hand(g, ["A-S", "K-H"])
+        card = g.hand[0]
+        card.edition = "holo"
+        item = ConsumableItem(key="c_aura")
+        g.consumeables.append(item)
+        self.assertEqual(g.use_consumable(0), "needs_target")
+        self.assertEqual(g.finish_consumable_target([0]), "invalid")
+        self.assertEqual(card.edition, "holo")
+        self.assertIn(item, g.consumeables)
+        self.assertIsNotNone(g.pending_consumable)          # 可以重选目标
+
+    def test_aura_applies_weighted_edition(self):
+        g = new_game(seed=5)
+        set_hand(g, ["A-S", "K-H"])
+        card = g.hand[0]
+        g.consumeables.append(ConsumableItem(key="c_aura"))
+        self.assertEqual(g.use_consumable(0), "needs_target")
+        self.assertEqual(g.finish_consumable_target([0]), "done")
+        self.assertIn(card.edition, ("foil", "holo", "polychrome"))
+        self.assertEqual(g.consumeables, [])
 
 
 class TestRunFlow(unittest.TestCase):

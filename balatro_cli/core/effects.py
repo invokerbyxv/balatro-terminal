@@ -9,7 +9,7 @@ from ..data import centers as centers_data
 from ..data import consumables as consumable_data
 from ..data import tags as tag_data
 from ..data import blinds as blind_data
-from .lookup import joker_cn, roll_prob
+from .lookup import guaranteed_edition, joker_cn, roll_prob
 from .joker_fx import JOKER_FX, _joker_index, calculate_joker, is_face_card
 
 
@@ -277,7 +277,8 @@ def use_consumable(game, item: ConsumableItem) -> str:
 # 消耗牌：无目标效果
 #
 # 每个 handler 接收 (game, item) 并返回 "done"；需要从手牌选目标的一律落到
-# needs_target，由 UI 收集目标后交给 finish_consumable_target。
+# needs_target，由 UI 收集目标后交给 finish_consumable_target；没有可用目标时
+# 返回 "invalid" 且不移除 item（对应原版 can_use_consumeable 禁用该牌）。
 # 移除 item 的时机刻意与原实现逐条保持一致：部分效果（女祭司/皇帝、
 # 愚者）在判定栏位时依赖 item 是否还在 consumeables 里。
 # ----------------------------------------------------------------------
@@ -329,12 +330,27 @@ def _use_temperance(game, item):
     return "done"
 
 
+def _editionless_jokers(game) -> List[JokerItem]:
+    """可附加版本的小丑：镜像 card.lua 的 ``eligible_*_jokers``（4209-4224）。
+
+    原版把「没有任何版本」的小丑单独收集起来给命运之轮 / 灵质 / 诅咒挑选，
+    因此已经有版本（箔片 / 全息 / 彩绘 / 负片）的小丑不会被再次附加，也不会
+    丢掉原来那个版本。
+    """
+    return [j for j in game.jokers if j.edition is None]
+
+
 def _use_wheel_of_fortune(game, item):
-    if not game.jokers:
-        game.say("命运之轮：没有小丑牌")
-    elif roll_prob(game, 4, "wheel"):
-        j = game.rng.choice(game.jokers)
-        j.edition = game.rng.choice(["foil", "holo", "polychrome"])
+    pool = _editionless_jokers(game)
+    if not pool:
+        # 原版在没有候选小丑时由 can_use_consumeable 直接禁用这张塔罗
+        # （card.lua 1533-1535），这里同样不消耗它，免得白白浪费一张牌。
+        game.say("命运之轮：没有可附加版本的小丑（未消耗）" if game.jokers
+                 else "命运之轮：没有小丑牌（未消耗）")
+        return "invalid"
+    if roll_prob(game, 4, "wheel"):
+        j = game.rng.choice(pool)
+        j.edition = guaranteed_edition(game, "wheel_of_fortune")
         game.say(f"命运之轮：{joker_cn(j.key)} 获得版本 {j.edition}！")
     else:
         game.say("命运之轮：NOPE！")
@@ -444,10 +460,16 @@ def _use_ouija(game, item):
 
 
 def _use_ectoplasm(game, item):
-    if game.jokers:
-        j = game.rng.choice(game.jokers)
-        j.edition = "negative"
-        game.say(f"灵质：{joker_cn(j.key)} 获得负片版本")
+    pool = _editionless_jokers(game)
+    if not pool:
+        # 原版 can_use_consumeable 在没有候选小丑时禁用这张幻灵（card.lua 1547-1548），
+        # 所以「手牌上限 -1」也不会发生。
+        game.say("灵质：没有可附加版本的小丑（未消耗）" if game.jokers
+                 else "灵质：没有小丑牌（未消耗）")
+        return "invalid"
+    j = game.rng.choice(pool)
+    j.edition = "negative"
+    game.say(f"灵质：{joker_cn(j.key)} 获得负片版本")
     game.change_hand_size(-1)
     game.say("灵质：手牌上限 -1")
     game.consumeables.remove(item)
@@ -470,13 +492,18 @@ def _use_ankh(game, item):
 
 
 def _use_hex(game, item):
-    if game.jokers:
-        j = game.rng.choice(game.jokers)
-        j.edition = "polychrome"
-        game.say(f"诅咒：{joker_cn(j.key)} 获得彩绘版本")
-        for v in list(game.jokers):
-            if v is not j and not v.eternal:
-                game.jokers.remove(v)
+    pool = _editionless_jokers(game)
+    if not pool:
+        # 同上：没有候选小丑时原版禁用这张幻灵（card.lua 1547-1548），其他小丑也不会被销毁。
+        game.say("诅咒：没有可附加版本的小丑（未消耗）" if game.jokers
+                 else "诅咒：没有小丑牌（未消耗）")
+        return "invalid"
+    j = game.rng.choice(pool)
+    j.edition = "polychrome"
+    game.say(f"诅咒：{joker_cn(j.key)} 获得彩绘版本")
+    for v in list(game.jokers):
+        if v is not j and not v.eternal:
+            game.jokers.remove(v)
     game.consumeables.remove(item)
     return "done"
 
@@ -608,7 +635,7 @@ def _target_suit(game, targets, info):
 
 def _target_aura(game, targets, info):
     if targets:
-        targets[0].edition = game.rng.choice(["foil", "holo", "polychrome"])
+        targets[0].edition = guaranteed_edition(game, "aura")
     return "灵光：附加随机版本"
 
 
@@ -660,6 +687,10 @@ def finish_consumable_target(game, target_cards: List[Card]) -> str:
         game.say(f"目标数量必须为 {min_sel}-{max_sel} 张")
         return "invalid"
     targets = target_cards[:max_sel]
+    # 灵光只能作用于还没有版本的牌（card.lua 1544-1545 的 can_use_consumeable）
+    if info.get("editionless_target") and any(c.edition for c in targets):
+        game.say(f"{info.get('cn', key)}：目标牌已有版本（未消耗）")
+        return "invalid"
     handler = _TARGET_CONSUMABLES.get(key)
     msg = (handler(game, targets, info) if handler is not None
            else f"未知消耗牌 {key}")

@@ -7,8 +7,10 @@ from typing import Optional
 
 from .. import ui
 from ...core.game import MAX_PLAY_SIZE
-from ...core.scoring import blocked_play_reason
-from ...core.hand_eval import HAND_CN, HAND_ORDER, best_hand, hand_level_stats
+from ...core.scoring import (add_extra_scoring_cards, blocked_play_reason,
+                             evaluate_hand)
+from ...core.hand_eval import (HAND_CN, HAND_ORDER, best_hand, hand_level_stats,
+                               is_royal_flush)
 from ...data import blinds as blind_data
 from ...data import consumables as consumable_data
 from ...data import vouchers as voucher_data
@@ -89,6 +91,7 @@ class RoundMixin:
         self._blind_meta()
         self._stats()
         self._hand_line(clickable=True)
+        self._hand_type_line()
         self._blocked_hint()
         self._items_line(clickable=True)
         self._show_log()
@@ -310,6 +313,9 @@ class RoundMixin:
                 return
             result = g.finish_consumable_target(selected)
             if result == "invalid":
+                # 目标不合法（如灵光选了已有版本的牌）：原因进实时消息，留在选牌界面重选
+                self._push_log(g.messages)
+                g.messages.clear()
                 return
             self._push_log(g.messages)
             g.messages.clear()
@@ -397,30 +403,81 @@ class RoundMixin:
             self.state = self.info_return
 
 
+    def _preview_hand(self):
+        """返回 (牌型名, 记分牌, 是否按已选牌判定, 是否皇家同花顺)；无牌时名称为 None。
+
+        已选牌按实际出牌规则判定（含石头牌 / Splash 的额外记分牌，与结算一致）；
+        未选牌时用 :func:`best_hand` 预判整手能打出的最佳牌型。
+        """
+        g = self.game
+        chosen = g.selected_cards()
+        if chosen:
+            name, base = evaluate_hand(g, chosen)
+            scoring = add_extra_scoring_cards(g, chosen, base)
+            return name or None, scoring, True, is_royal_flush(name, base)
+        if not g.hand:
+            return None, [], False, False
+        name, scoring = best_hand(g.hand,
+                                  four_fingers=g.any_joker("j_four_fingers"),
+                                  shortcut=g.any_joker("j_shortcut"),
+                                  smeared=g.any_joker("j_smeared"))
+        return name or None, scoring, False, is_royal_flush(name, scoring)
+
+
     def _preview_hand_name(self) -> Optional[str]:
         """当前选择（没选牌时为整手牌）能打出的最佳牌型名；无牌时返回 None。"""
+        return self._preview_hand()[0]
+
+
+    def _hand_stats_text(self, name: str, royal: bool = False) -> str:
+        """「牌型名 · Lv.x（chips 筹码 × mult 倍率）」——信息界面与出牌界面共用。"""
         g = self.game
-        cards = g.selected_cards() or g.hand
-        if not cards:
-            return None
-        name, _ = best_hand(cards,
-                            four_fingers=g.any_joker("j_four_fingers"),
-                            shortcut=g.any_joker("j_shortcut"),
-                            smeared=g.any_joker("j_smeared"))
-        return name or None
+        lv = g.hand_levels[name]
+        mult, chips = hand_level_stats(name, lv)
+        display = "皇家同花顺" if royal else HAND_CN.get(name, name)
+        return (f"{ui.c(display, ui.YELLOW)} · Lv.{lv}"
+                f"（{ui.c(str(chips), ui.GREEN)} 筹码 × {ui.c(str(mult), ui.RED)} 倍率）")
 
 
     def _hand_preview(self):
-        """当前手牌能打出的牌型及其等级数值。"""
-        g = self.game
-        name = self._preview_hand_name()
+        """信息界面：当前手牌能打出的牌型及其等级数值。"""
+        name, _scoring, chosen, royal = self._preview_hand()
         if name is None:
             return
-        lv = g.hand_levels[name]
-        mult, chips = hand_level_stats(name, lv)
-        label = "当前选择" if g.selected_cards() else "当前手牌可组成"
-        print(f"  {ui.c(label, ui.GRAY)} {ui.c(HAND_CN.get(name, name), ui.YELLOW)} · "
-              f"Lv.{lv}（{ui.c(str(chips), ui.GREEN)} 筹码 × {ui.c(str(mult), ui.RED)} 倍率）")
+        label = "当前选择" if chosen else "当前手牌可组成"
+        print(f"  {ui.c(label, ui.GRAY)} {self._hand_stats_text(name, royal)}")
+
+
+    def _hand_type_line(self):
+        """出牌界面：实时显示已选牌构成的牌型，并标出其中的计分牌。
+
+        未选牌时给出整手最佳牌型的预判，让玩家先看清这手牌的上限。
+        """
+        g = self.game
+        name, scoring, chosen, royal = self._preview_hand()
+        if name is None:
+            return
+        if not chosen:
+            print(f"  {ui.c('牌型：', ui.GRAY)}{ui.c('—', ui.GRAY)}   "
+                  f"{ui.c('整手最佳：', ui.GRAY)}{self._hand_stats_text(name, royal)}")
+            return
+        line = f"  {ui.c('牌型：', ui.GRAY)}{self._hand_stats_text(name, royal)}"
+        # 盲注规则让本手不计分时不再标计分牌，原因由紧跟着的 _blocked_hint 说明
+        if not blocked_play_reason(g, g.selected_cards()):
+            scoring_ids = {id(c) for c in scoring}
+            picked = [(i + 1, id(c) in scoring_ids) for i, c in enumerate(g.hand)
+                      if getattr(c, "selected", False)]
+            nums = [n for n, hit in picked if hit]
+            skipped = [n for n, hit in picked if not hit]
+            if nums and not skipped:
+                line += "   " + ui.c("全部计分", ui.GRAY)
+            elif nums:
+                line += ("   " + ui.c("计分牌", ui.GRAY) + " "
+                         + " ".join(ui.c(f"#{n}", ui.CYAN) for n in nums))
+            if skipped:
+                line += "   " + ui.c(
+                    "不计分 " + " ".join(f"#{n}" for n in skipped), ui.GRAY)
+        print(line)
 
 
     def _hand_levels(self, current: Optional[str]):

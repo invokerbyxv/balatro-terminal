@@ -137,13 +137,10 @@ def evaluate_poker_hand(hand: List[Card], four_fingers: bool = False,
     _4 = get_X_same(4, hand)
     _3 = get_X_same(3, hand)
     _2 = get_X_same(2, hand)
-    # 派生链：5oak→4oak→3oak→pair（5 张 A 时 get_X_same(2/3/4) 为空）
-    if _5:
-        _4 = [_5[0][:4]]
-    if _4:
-        _3 = [_4[0][:3]]
-    if _3:
-        _2 = [_3[0][:2]]
+    # get_X_same 只返回「恰好 num 张」的同点数分组（Lua misc_functions.lua:592）。
+    # 原 Lua 在判定结束后才用 5oak→4oak→3oak→pair 派生 results 里未被选中的下位牌型，
+    # 不影响 top；这里提前派生会把「三条」误判成「葫芦」（对子组被三条的前两张顶替），
+    # 因此必须保持四组原始分组再按优先级判定。
 
     _flush = get_flush(hand, four_fingers, smeared)
     _straight = get_straight(hand, four_fingers, shortcut)

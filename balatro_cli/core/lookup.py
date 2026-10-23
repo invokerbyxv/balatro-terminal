@@ -22,3 +22,20 @@ def roll_prob(game, denom: int, label: str = "") -> bool:
     if game.any_joker("j_oops"):
         denom = max(1, denom // 2)
     return game.rng.chance(denom, label)
+
+
+def guaranteed_edition(game, label: str = "edition") -> str:
+    """附上一个必定生效的随机版本：箔片 50% / 全息 35% / 彩绘 15%。
+
+    镜像 common_events.lua 的 ``poll_edition`` 在 ``_guaranteed = true``、
+    ``_no_neg = true`` 时的分支（2058-2067）：负片那一档（``> 0.925``）因为
+    ``_no_neg`` 被跳过、顺延给彩绘，往后依次是 0.85 / 0.5 两道阈值，于是命中
+    后的分布是彩绘 15%、全息 35%、箔片 50%。命运之轮与灵光都用这组参数调用
+    原版函数，负片版本不会出现（负片只来自灵质 / 负片标签等固定来源）。
+    """
+    x = game.rng.roll(label)
+    if x > 0.85:
+        return "polychrome"
+    if x > 0.5:
+        return "holo"
+    return "foil"
