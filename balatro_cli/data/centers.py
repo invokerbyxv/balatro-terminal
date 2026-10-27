@@ -102,12 +102,12 @@ JOKERS = {
     "j_rocket": {"cn": "火箭", "r": 2, "c": 6, "e": "每轮 +$1，击败头目盲注后 +$2（永久）"},
     "j_midas_mask": {"cn": "迈达斯面具", "r": 2, "c": 7, "e": "打出的人头牌计分时变成黄金牌"},
     "j_luchador": {"cn": "摔跤手", "r": 2, "c": 5, "e": "出售以禁用当前头目盲注效果"},
-    "j_photograph": {"cn": "照片", "r": 2, "c": 5, "e": "第一张打出的人头牌计分时 ×2 倍率"},
+    "j_photograph": {"cn": "照片", "r": 1, "c": 5, "e": "第一张打出的人头牌计分时 ×2 倍率"},
     "j_gift": {"cn": "礼品卡", "r": 2, "c": 6, "e": "每轮结束给所有小丑和消耗牌 +$1 卖价"},
     "j_turtle_bean": {"cn": "黑龟豆", "r": 2, "c": 6, "e": "+5 手牌，每轮 -1"},
     "j_erosion": {"cn": "侵蚀", "r": 2, "c": 6, "e": "全牌组每低于 52 张 1 张 +4 倍率"},
-    "j_reserved_parking": {"cn": "私人车位", "r": 2, "c": 6, "e": "手持每张人头牌 1/2 概率 +$1"},
-    "j_mail": {"cn": "邮件回扣", "r": 2, "c": 4, "e": "每弃掉指定点数的牌 +$5，点数每轮轮换"},
+    "j_reserved_parking": {"cn": "私人车位", "r": 1, "c": 6, "e": "手持每张人头牌 1/2 概率 +$1"},
+    "j_mail": {"cn": "邮件回扣", "r": 1, "c": 4, "e": "每弃掉指定点数的牌 +$5，点数每轮轮换"},
     "j_to_the_moon": {"cn": "冲向月球", "r": 2, "c": 5, "e": "每轮结束每持有 $5 额外 +$1 利息"},
     "j_lucky_cat2": {"cn": "招财猫", "r": 2, "c": 6, "e": "幸运牌成功触发时 +×0.25 倍率"},
     "j_baseball": {"cn": "棒球卡", "r": 3, "c": 8, "e": "每个罕见小丑 +×1.5 倍率"},
@@ -162,6 +162,11 @@ JOKERS = {
     "j_yorick": {"cn": "约里克", "r": 4, "c": 20, "e": "每弃 23 张牌 +×1 倍率（永久）"},
     "j_chicot": {"cn": "希科", "r": 4, "c": 20, "e": "禁用所有头目盲注效果"},
     "j_perkeo": {"cn": "帕奇欧", "r": 4, "c": 20, "e": "商店结束时复制 1 张随机消耗牌（负片）"},
+    # ---------- 审计补录：原版存在但 CLI 原先缺失的 2 张 ----------
+    "j_campfire": {"cn": "篝火", "r": 3, "c": 9,
+                   "e": "每卖出一张牌 +×0.25 倍率，击败头目后重置为 ×1"},
+    "j_mr_bones": {"cn": "骨头先生", "r": 2, "c": 5,
+                   "e": "失败时若已达目标 25% 则免除失败，并销毁自身"},
 }
 
 # 去掉占位重复键
@@ -186,21 +191,106 @@ def joker_price(key: str) -> int:
     return JOKERS.get(key, {}).get("c", 1)
 
 
-def random_joker_key(game, rarity=None, exclude=None) -> str:
+# ----------------------------------------------------------------------
+# 卡池门控（对应 common_events.lua get_current_pool 的筛选条件）
+# ----------------------------------------------------------------------
+#: 需要牌组里已有该增强牌才会出现的小丑（``enhancement_gate``）
+ENHANCEMENT_GATE = {
+    "j_steel_joker": "steel",
+    "j_stone": "stone",
+    "j_lucky_cat": "lucky",
+    "j_ticket": "gold",
+    "j_glass": "glass",
+}
+
+#: 池标记：大麦克香蕉灭绝后不再出现；卡文迪什只在灭绝后才出现
+#: （``no_pool_flag`` / ``yes_pool_flag``，pool_flags 由 j_gros_michel 销毁时置位）
+NO_POOL_FLAG = {"j_gros_michel": "gros_michel_extinct"}
+YES_POOL_FLAG = {"j_cavendish": "gros_michel_extinct"}
+
+
+def pool_allowed(game, key: str) -> bool:
+    """这张小丑此刻是否允许出现在卡池里。"""
+    gate = ENHANCEMENT_GATE.get(key)
+    if gate and not any(c.enhanced == gate for c in game.all_playing_cards()):
+        return False
+    flag = NO_POOL_FLAG.get(key)
+    if flag and game.pool_flags.get(flag):
+        return False
+    flag = YES_POOL_FLAG.get(key)
+    if flag and not game.pool_flags.get(flag):
+        return False
+    return True
+
+
+def roll_joker_rarity(game) -> int:
+    """抽取小丑稀有度：普通 70% / 罕见 25% / 稀有 5%（传说不在随机池里）。
+
+    对应 common_events.lua 1969-1971：``> 0.95 → 3``、``> 0.7 → 2``，其余 1。
+    """
+    x = game.rng.roll("rarity")
+    if x > 0.95:
+        return 3
+    if x > 0.7:
+        return 2
+    return 1
+
+
+def _rarity_pool(game, rarity: int, exclude: set) -> list:
+    return [k for k, d in JOKERS.items()
+            if d["r"] == rarity and k not in exclude and pool_allowed(game, k)]
+
+
+def random_joker_key(game, rarity=None, exclude=None, legendary=False) -> str:
+    """按稀有度加权抽取一张小丑（对应 create_card('Joker') + get_current_pool）。
+
+    - ``rarity=None`` 时按 70/25/5 抽稀有度；传说（4）只能通过 ``legendary=True``
+      或显式 ``rarity=4`` 得到——普通商店 / 卡包 / 审判都不会出传说；
+    - 排除已拥有以及本批已生成过的小丑（原版 ``G.GAME.used_jokers``），
+      持有「马戏团长」时不排除，允许重复出现；
+    - 卡池门控：增强牌门控与池标记。
+    """
     exclude = set(exclude or [])
-    # 未拥有「马戏团长」时，卡池排除已拥有的小丑（原版：同款不可重复出现）
     if not game.any_joker("j_ring_master"):
         exclude |= {j.key for j in game.jokers}
-    pool = [k for k in JOKERS
-            if k not in exclude and (rarity is None or JOKERS[k]["r"] == rarity)]
+    if rarity is None:
+        rarity = 4 if legendary else roll_joker_rarity(game)
+    pool = _rarity_pool(game, rarity, exclude)
     if not pool:
-        # 已拥有目标稀有度全部小丑：允许重复，回退到该稀有度全卡池
-        pool = [k for k in JOKERS if rarity is None or JOKERS[k]["r"] == rarity]
-    return game.rng.choice(pool, "joker") if pool else "j_joker"
+        # 该稀有度的可选项都被排除时放宽「已拥有」限制（原版会重抽 UNAVAILABLE，
+        # 卡池抽空则回退 j_joker）
+        pool = _rarity_pool(game, rarity, set())
+    if not pool:
+        return "j_joker"
+    return game.rng.choice(pool, "joker")
+
+
+def poll_edition(game, mod: int = 1, no_neg: bool = False) -> str | None:
+    """随机给一张牌附加版本（对应 common_events.lua 的 poll_edition）。
+
+    默认（``mod=1``、``G.GAME.edition_rate=1``）：
+    负片 0.3%、彩绘 0.6%、全息 2%、箔片 4%；磨砺 / 发光升级把
+    ``edition_rate`` 提到 2 / 4，彩绘以下三档概率随之放大。
+    """
+    x = game.rng.roll("edition")
+    rate = getattr(game, "edition_rate", 1)
+    if x > 1 - 0.003 * mod and not no_neg:
+        return "negative"
+    if x > 1 - 0.006 * rate * mod:
+        return "polychrome"
+    if x > 1 - 0.02 * rate * mod:
+        return "holo"
+    if x > 1 - 0.04 * rate * mod:
+        return "foil"
+    return None
 
 
 def apply_voucher(game, vk: str):
-    """优惠券立即生效。"""
+    """优惠券立即生效（对应 card.lua 的 ``Card:apply_to_run``，1880-1971）。
+
+    商店概率类（塔罗/星球商人、魔术戏法、幻象、磨砺、发光升级）改的是
+    ``G.GAME.*_rate`` 这类运行期参数，由商店生成时读取。
+    """
     from ..data.vouchers import VOUCHERS
     d = VOUCHERS.get(vk, {})
     if "discount" in d:
@@ -210,23 +300,34 @@ def apply_voucher(game, vk: str):
     if vk in ("v_reroll_surplus", "v_reroll_glut"):
         game.reroll_cost_base = max(1, game.reroll_cost_base - 2)
     if vk in ("v_seed_money", "v_money_tree"):
-        game.interest_cap = d.get("interest", 50) if vk == "v_seed_money" else 100
+        game.interest_cap = 50 if vk == "v_seed_money" else 100
     if vk == "v_crystal_ball":
+        # 只有水晶球加消耗品格；预兆之球（v_omen_globe）不加（原版 apply_to_run 无此分支）
         game.add_consumable_slot()
-    if vk == "v_omen_globe":
-        game.add_consumable_slot()
+    if vk == "v_tarot_merchant":
+        game.tarot_rate = 4 * (9.6 / 4)          # 9.6
+    if vk == "v_tarot_tycoon":
+        game.tarot_rate = 4 * (32 / 4)           # 32
+    if vk == "v_planet_merchant":
+        game.planet_rate = 4 * (9.6 / 4)         # 9.6
+    if vk == "v_planet_tycoon":
+        game.planet_rate = 4 * (32 / 4)          # 32
+    if vk == "v_hone":
+        game.edition_rate = 2
+    if vk == "v_glow_up":
+        game.edition_rate = 4
+    if vk in ("v_magic_trick", "v_illusion"):
+        game.playing_card_rate = 4
     if vk in ("v_paint_brush", "v_palette"):
         pass  # 手牌上限每回合由 Game.round_hand_size 的 _voucher_bonus 汇总
     if vk in ("v_grabber", "v_nacho_tong", "v_wasteful", "v_recyclomancy"):
-        pass  # 每回合生效，见 game.select_blind
+        pass  # 每回合生效，见 Game._voucher_bonus
     if vk == "v_antimatter":
         game.add_joker_slot()
-    if vk == "v_hieroglyph":
+    if vk in ("v_hieroglyph", "v_petroglyph"):
+        # 底注 -1；象形文字另扣出牌次数、岩画另扣弃牌次数（见 _voucher_bonus）
         game.ante = max(1, game.ante - 1)
-    if vk == "v_petroglyph":
-        game.ante = max(1, game.ante - 1)
-    if vk == "v_blank":
-        pass
-    if vk in ("v_tarot_merchant", "v_tarot_tycoon", "v_planet_merchant", "v_planet_tycoon",
-              "v_magic_trick", "v_illusion", "v_telescope", "v_hone", "v_glow_up"):
-        pass  # 商店生成时查询 used_vouchers 处理
+    if vk in ("v_telescope", "v_observatory"):
+        pass  # 星球包首张 / 手中星球牌 ×1.5，分别在开包与记分时读取
+    if vk in ("v_omen_globe", "v_directors_cut", "v_retcon", "v_blank"):
+        pass  # 开包 / 头目重掷时读取

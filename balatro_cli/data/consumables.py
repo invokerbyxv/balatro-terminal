@@ -110,6 +110,44 @@ ALL_CONSUMABLES = {}
 for _d in (TAROTS, PLANETS, SPECTRALS):
     ALL_CONSUMABLES.update(_d)
 
+#: 不会直接进随机池的消耗牌：「灵魂」「黑洞」只按 0.3% 概率替换某一张开出的牌
+#: （common_events.lua 2088-2100），不会作为普通候选。
+HIDDEN_CONSUMABLES = {"c_soul", "c_black_hole"}
+
+#: 需要先打出过对应牌型才会进卡池的星球牌（``config.softlock``）
+PLANET_SOFTLOCK = {
+    "c_planet_x": "Five of a Kind",
+    "c_ceres": "Flush House",
+    "c_eris": "Flush Five",
+}
+
+_POOLS = {"tarot": TAROTS, "planet": PLANETS, "spectral": SPECTRALS}
+
+
+def pool(game, kind: str) -> list:
+    """可随机抽取的消耗牌池（对应 get_current_pool 对软锁/隐藏牌的剔除）。"""
+    out = []
+    for key, d in _POOLS[kind].items():
+        if key in HIDDEN_CONSUMABLES:
+            continue
+        if key in PLANET_SOFTLOCK and not game.hands_count.get(PLANET_SOFTLOCK[key]):
+            continue
+        out.append(key)
+    return out
+
+
+def random_consumable(game, kind: str) -> str:
+    keys = pool(game, kind)
+    return game.rng.choice(keys, kind) if keys else next(iter(_POOLS[kind]))
+
+
+def planet_for_hand(hand: str) -> str | None:
+    """某个牌型对应的星球牌键（蓝封 / 望远镜 / 天文台用）。"""
+    for key, d in PLANETS.items():
+        if d["hand"] == hand:
+            return key
+    return None
+
 
 def get_consumable_cn(key: str) -> str:
     d = ALL_CONSUMABLES.get(key)

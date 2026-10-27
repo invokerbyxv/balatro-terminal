@@ -23,13 +23,16 @@ BOOSTERS = {
     "p_buffoon_mega": {"cn": "超大滑稽包", "cost": 8, "pack_size": 4, "choose": 2, "kind": "buffoon"},
 }
 
-# 补充包出现权重（普通种类权重 1.0，小丑 0.6；Mega 变体额外权重）
-# 商店卡包只卖：小丑包 / 塔罗包 / 星球包 / 标准包（幻灵包仅由标签等效果开启）
+# 补充包出现权重：按原版 32 个 Booster 定义（每种美术变体各算一项）折算成
+# 「每个变体的权重 × 变体数」，因此同一档的总权重就是下面的值。
+#   normal 1 / jumbo 1 / mega 0.25；buffoon 0.6；spectral 0.3（mega 0.07）
+# 变体数：arcana/celestial/standard 为 4/2/2，buffoon 为 2/1/1，spectral 为 2/1/1。
 PACK_WEIGHTS = {
-    "p_arcana_normal": 1.0, "p_celestial_normal": 1.0, "p_standard_normal": 1.0,
-    "p_buffoon_normal": 0.6,
-    "p_arcana_mega": 0.25, "p_celestial_mega": 0.25, "p_standard_mega": 0.25,
-    "p_buffoon_mega": 0.15,
+    "p_arcana_normal": 4.0, "p_arcana_jumbo": 2.0, "p_arcana_mega": 0.5,
+    "p_celestial_normal": 4.0, "p_celestial_jumbo": 2.0, "p_celestial_mega": 0.5,
+    "p_standard_normal": 4.0, "p_standard_jumbo": 2.0, "p_standard_mega": 0.5,
+    "p_buffoon_normal": 1.2, "p_buffoon_jumbo": 0.6, "p_buffoon_mega": 0.15,
+    "p_spectral_normal": 0.6, "p_spectral_jumbo": 0.3, "p_spectral_mega": 0.07,
 }
 
 # 增强卡（Enhanced）：数值对应 get_chip_bonus / get_chip_mult / get_chip_x_mult 等
