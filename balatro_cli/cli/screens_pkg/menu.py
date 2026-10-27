@@ -71,9 +71,34 @@ class MenuMixin:
             key = names[idx]
         except (ValueError, IndexError):
             return
+        self.pending_deck = key
+        self.state = "stake"
+
+    def _stake_select(self):
+        """赌注选择（难度梯度）：8 档，档位越高叠加越多修正。"""
+        from ...data import stakes as stake_data
+
+        deck = deck_data.DECKS.get(self.pending_deck or "b_red", {})
+        self._banner("选择赌注", f"牌组：{deck.get('cn', '')} · 档位越高越难")
+        for i, key in enumerate(stake_data.STAKE_ORDER):
+            cfg = stake_data.STAKES[key]
+            mark = ""
+            if self.game is not None and getattr(self.game, "stake", None) == key:
+                mark = ui.c(" ·", ui.GREEN)
+            print(f"  {ui.c(str(i + 1), ui.CYAN)} {ui.BOLD}{cfg['cn']}{ui.RESET}"
+                  f"  {ui.c(cfg['effect'], ui.GRAY)}{mark}")
+        print(f"  {ui.c('0', ui.CYAN)} 返回牌组选择")
+        cmd = ui.prompt()
+        if cmd == "0" or cmd == "quit":
+            self.state = "deck"
+            return
+        try:
+            stake = stake_data.STAKE_ORDER[int(cmd) - 1]
+        except (ValueError, IndexError):
+            return
         self.game = Game(seed=getattr(self, "_seed_override", None))
         self.log = []
-        self.game.start_run(key)
+        self.game.start_run(self.pending_deck or "b_red", stake)
         self.state = "blind"
 
 

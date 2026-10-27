@@ -23,7 +23,9 @@ class RoundMixin:
 
     def _blind_select(self):
         g = self.game
-        self._banner(f"{self._ante_label()} · 选择盲注", "跳过可获得标签")
+        is_boss = g.blind_on_deck == "Boss"
+        self._banner(f"{self._ante_label()} · 选择盲注",
+                     "迎战头目盲注" if is_boss else "跳过可获得标签")
         # 预览跳过后会获得的标签（reset_blinds 已预生成，所见即所得）
         tag_key = g.blind_tag_key(g.blind_on_deck)
         if tag_key:
@@ -35,18 +37,21 @@ class RoundMixin:
             print(f"  {ui.c('1', ui.CYAN)} 迎战 小盲注  （目标 {ui.c(str(g.current_blind_chips()), ui.YELLOW)} · 奖励 $3）")
             print(f"  {ui.c('2', ui.CYAN)} {skip_line}")
         else:
-            order = ["Small", "Big", "Boss"]
             label = {"Small": "小盲注", "Big": "大盲注", "Boss": "头目盲注"}[g.blind_on_deck]
             mult = {"Small": "", "Big": " · 奖励 $4", "Boss": " · 奖励 $5"}[g.blind_on_deck]
-            if g.blind_on_deck == "Boss":
+            if is_boss:
                 boss = blind_data.get_blind_cfg(g.boss_key)
                 effect = ui.prob_text(g, boss["effect"])
                 if g.boss_disabled():
                     effect = f"{effect} · {ui.c('已禁用', ui.GREEN)}"
                 print(f"  {ui.c('1', ui.CYAN)} 迎战  ★{boss['cn']}★  （目标 {ui.c(str(g.current_blind_chips()), ui.YELLOW)} · {effect}）")
+                # 原版头目盲注没有跳过按钮（blind_tags 只预生成小盲/大盲）
+                print(f"  {ui.c('2', ui.GRAY)} 跳过（头目盲注不可跳过）")
             else:
                 print(f"  {ui.c('1', ui.CYAN)} 迎战 {label}  （目标 {ui.c(str(g.current_blind_chips()), ui.YELLOW)}{mult}）")
-            print(f"  {ui.c('2', ui.CYAN)} {skip_line}")
+                print(f"  {ui.c('2', ui.CYAN)} {skip_line}")
+                if g.boss_can_reroll():
+                    print(f"  {ui.c('r', ui.GREEN)} 花 ${g.boss_reroll_cost()} 重掷头目盲注")
         self._items_line()
         print(f"  {ui.c('u', ui.BLUE)} 用消耗   {ui.c('c', ui.CYAN)} 收藏   "
               f"{ui.c('i', ui.CYAN)} 信息   {ui.c('q', ui.CYAN)} 返回菜单")
@@ -57,18 +62,20 @@ class RoundMixin:
             g.messages.clear()
             self.state = "play"
         elif cmd == "2":
-            ante_before = g.ante
             g.skip_blind()
             self._push_log(g.messages)
             g.messages.clear()
-            # 跳过头目则本底注结束，进入商店；跳过最终头目则通关
-            if g.run_won and not g.endless:
-                self._win_screen()
-            elif g.ante > ante_before:
-                self._enter_shop()
-            else:
-                self._show_log()
-                input("  [回车继续]")
+            # 标签可能当场开了免费卡包：先取牌，再回到盲注选择
+            if g.pending_pack:
+                self.pack_return = "blind"
+                self.state = "pack"
+                return
+            self._show_log()
+            input("  [回车继续]")
+        elif cmd == "r" and not is_boss:
+            g.reroll_boss()
+            self._push_log(g.messages)
+            g.messages.clear()
         elif cmd == "3" or cmd == "j":
             self.return_state = "blind"
             self.state = "items"

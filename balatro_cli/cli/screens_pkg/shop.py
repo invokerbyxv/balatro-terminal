@@ -22,7 +22,11 @@ class ShopMixin:
         g.messages.clear()
         self.log = []
         # 标签（小丑/塔罗/星球/标准/幻灵包）可能在进商店时就开了一个免费卡包
-        self.state = "pack" if g.pending_pack else "shop"
+        if g.pending_pack:
+            self.pack_return = "shop"
+            self.state = "pack"
+        else:
+            self.state = "shop"
 
 
     def _shop(self):
@@ -47,10 +51,13 @@ class ShopMixin:
                 pack_desc = f"({info['pack_size']}选{info['choose']})"
                 print(f"  {ui.c('b' + str(i + 1), ui.CYAN)} {info['cn']}  {ui.c('$' + str(price), ui.YELLOW)}"
                       f"  {ui.c(pack_desc, ui.GRAY)}")
-        if g.shop_voucher:
-            vd = voucher_data.VOUCHERS[g.shop_voucher]
-            price = 0 if g.pending_free_voucher else 10
-            print(f"优惠券: {ui.c('v', ui.CYAN)} {ui.BOLD}{vd['cn']}{ui.RESET}  {ui.c('$' + str(price), ui.YELLOW)}  {ui.c(vd['effect'], ui.GRAY)}")
+        if g.shop_offer_vouchers:
+            price = g.voucher_price()
+            for i, vk in enumerate(g.shop_offer_vouchers):
+                vd = voucher_data.VOUCHERS[vk]
+                key = "v" if len(g.shop_offer_vouchers) == 1 else f"v{i + 1}"
+                print(f"优惠券: {ui.c(key, ui.CYAN)} {ui.BOLD}{vd['cn']}{ui.RESET}  "
+                      f"{ui.c('$' + str(price), ui.YELLOW)}  {ui.c(vd['effect'], ui.GRAY)}")
         self._items_line()
         self._show_log()
         print(f"  {ui.c('r', ui.GREEN)}重掷(${g.calculate_reroll_cost()})  {ui.c('s', ui.YELLOW)}售卖  "
@@ -67,6 +74,7 @@ class ShopMixin:
                 self._push_log(g.messages)
                 g.messages.clear()
                 if g.pending_pack:
+                    self.pack_return = "shop"
                     self.state = "pack"
         elif cmd == "j":
             self.return_state = "shop"
@@ -80,8 +88,12 @@ class ShopMixin:
         elif cmd == "u":
             self.return_state = "shop"
             self.state = "consume"
-        elif cmd == "v":
-            g.buy_voucher()
+        elif cmd.startswith("v") and cmd[1:].isdigit():
+            g.buy_voucher(int(cmd[1:]) - 1)
+            self._push_log(g.messages)
+            g.messages.clear()
+        elif cmd.startswith("v"):
+            g.buy_voucher(0)
             self._push_log(g.messages)
             g.messages.clear()
         elif cmd == "r":
@@ -113,7 +125,7 @@ class ShopMixin:
         g = self.game
         pp = g.pending_pack
         if not pp:
-            self.state = "shop"
+            self.state = self.pack_return
             return
         cfg = pp["cfg"]
         kind = cfg["kind"]
@@ -143,7 +155,7 @@ class ShopMixin:
             g.skip_pack()
             self._push_log(g.messages)
             g.messages.clear()
-            self.state = "shop"
+            self.state = self.pack_return
             return
         if cmd == "s":
             self.return_state = "pack"
@@ -162,4 +174,4 @@ class ShopMixin:
         self._push_log(g.messages)
         g.messages.clear()
         if status in ("done", "none"):
-            self.state = "shop"
+            self.state = self.pack_return

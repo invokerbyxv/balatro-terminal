@@ -23,6 +23,10 @@ class CommonMixin:
         self.return_state: str = "play"
         self.target_return: str = "play"
         self.info_return: str = "play"
+        #: 卡包界面退出后回到哪个界面（商店买包 → shop；跳过盲注的标签开包 → blind）
+        self.pack_return: str = "shop"
+        #: 选牌组后暂存，等选完赌注再开局
+        self.pending_deck: str | None = None
         self.regions: List[ui.Region] = []
 
 
@@ -42,6 +46,8 @@ class CommonMixin:
                         break
                 elif self.state == "deck":
                     self._deck_select()
+                elif self.state == "stake":
+                    self._stake_select()
                 elif self.state == "blind":
                     self._blind_select()
                 elif self.state == "play":
