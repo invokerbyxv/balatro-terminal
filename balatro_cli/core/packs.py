@@ -8,24 +8,28 @@ functions/button_callbacks.lua 的 ``can_select_card`` / ``skip_booster``）：
 
 * ``choose`` 是**上限**而非配额：取不满也能结束，已取走的牌保留；
 * 每张牌选中即结算并从卡包移除，选满后卡包自动关闭；
-* 小丑栏已满时不能取走小丑，需先在卡包界面里出售一张现有小丑；
-* 同一个卡包内不出现重复的塔罗 / 星球 / 幻灵 / 小丑牌（见
-  :meth:`Game._draw_pack_keys` 的说明）。
+* 小丑栏 / 消耗品栏已满时不能取走对应牌，需先出售一张再选；
+* 同一个卡包内不出现重复的塔罗 / 星球 / 幻灵 / 小丑牌（持有「马戏团长」时除外）；
+* 开包触发 ``open_booster``（幻觉），跳过卡包触发 ``skipping_booster``（红牌）。
 """
 from __future__ import annotations
 
 from typing import List
 
 from .card import Card, ENHANCED, RANKS, SUITS
-from .items import JokerItem, ConsumableItem, BoosterPack
+from .items import BoosterPack, ConsumableItem, JokerItem
+from .lookup import roll_prob
 from ..data import boosters as booster_data
-from ..data import consumables as consumable_data
 from ..data import centers as centers_data
+from ..data import consumables as consumable_data
 
 
 class PackMixin:
     """见模块文档。"""
 
+    # ------------------------------------------------------------------
+    # 开包
+    # ------------------------------------------------------------------
     def _open_pack(self, bp: BoosterPack):
         self._open_pack_now(bp.key, free=False)
 
@@ -35,58 +39,96 @@ class PackMixin:
                              "items": self._generate_pack_contents(pk),
                              "choose": cfg["choose"], "picked": 0,
                              "free": free}
+        self._fire_open_booster()
 
+    def _fire_open_booster(self):
+        """打开补充包（``open_booster`` 上下文）：幻觉有 1/2 概率给张塔罗。"""
+        for j in list(self.jokers):
+            if j.debuffed:
+                continue
+            if j.key != "j_hallucination":
+                continue
+            if len(self.consumeables) >= self.consumable_slots:
+                continue
+            if roll_prob(self, 2, "halu"):
+                key = consumable_data.random_consumable(self, "tarot")
+                self.gain_consumable(key)
+                self.say(f"幻觉：开启卡包获得 {consumable_data.get_consumable_cn(key)}")
+
+    # ------------------------------------------------------------------
+    # 卡包内容
+    # ------------------------------------------------------------------
     def _generate_pack_contents(self, pk: str) -> list:
         cfg = booster_data.BOOSTERS[pk]
         kind = cfg["kind"]
         n = cfg["pack_size"]
-        items = []
+        items: list = []
         if kind in ("tarot", "planet", "spectral"):
-            pool = {"tarot": consumable_data.TAROTS,
-                    "planet": consumable_data.PLANETS,
-                    "spectral": consumable_data.SPECTRALS}[kind]
-            for key in self._draw_pack_keys(pool, n):
+            drawn: set = set()
+            for i in range(n):
+                key = self._pack_consumable_key(kind, i, drawn)
+                drawn.add(key)
                 items.append(ConsumableItem(key=key))
         elif kind == "buffoon":
-            drawn = set()
+            drawn = set() if self.any_joker("j_ring_master") else {j.key for j in self.jokers}
             for _ in range(n):
                 key = centers_data.random_joker_key(self, exclude=drawn)
                 drawn.add(key)
-                j = JokerItem(key=key)
-                cfgj = centers_data.joker_cfg(key)
-                j.buy_cost = cfgj["cost"]
-                j.sell_price = max(1, cfgj["cost"] // 2)
-                items.append(j)
+                # 卡包小丑同样过 poll_edition，但不吃版本类标签
+                items.append(self.make_joker(key, shop=False))
         elif kind == "standard":
             for _ in range(n):
                 items.append(self._random_standard_card())
         return items
 
-    def _draw_pack_keys(self, pool, n: int) -> List[str]:
-        """从卡池无放回地抽 ``n`` 张，保证同一个卡包内不出现重复的牌。
+    def _pack_consumable_key(self, kind: str, index: int, drawn: set) -> str:
+        """一张卡包消耗牌（对应 card.lua 1728-1775 的 create_card 分支）。
 
-        镜像原版：``create_card`` 每造出一张牌，``Card:set_ability`` 就把它的
-        key 写进 ``G.GAME.used_jokers``；随后 ``get_current_pool`` 会把已出现
-        的 key 从卡池里剔除（没有「表演者」小丑时）。所以同一个卡包里连续
-        ``create_card`` 抽到的一定是不同种类的塔罗 / 星球 / 幻灵 / 小丑牌。
-
-        卡池不足 ``n`` 张时允许重复（原版此时会回退到兜底牌，这里保持发牌数
-        不变）——现有卡池都远大于包容量，这条分支只是防御。
+        - 塔罗包：预兆之球 20% 改为幻灵牌；
+        - 星球包：望远镜让第 1 张变成「最常打牌型」对应的星球牌；
+        - 灵魂 / 黑洞：每张牌 0.3% 概率被替换（不会作为普通候选出现）。
         """
-        keys = list(pool)
-        picked = self.rng.sample(keys, min(n, len(keys)))
-        while len(picked) < n:
-            picked.append(self.rng.choice(keys))
-        return picked
+        if kind == "tarot":
+            if self.has_voucher("v_omen_globe") and self.rng.roll("omen_globe") > 0.8:
+                pool_kind = "spectral"
+            else:
+                pool_kind = "tarot"
+        elif kind == "planet":
+            pool_kind = "planet"
+            if self.has_voucher("v_telescope") and index == 0:
+                hand = self.most_played_hand()
+                planet = consumable_data.planet_for_hand(hand) if hand else None
+                if planet:
+                    return planet
+        else:
+            pool_kind = "spectral"
+
+        # 灵魂 / 黑洞的 0.3% 替换：塔罗/幻灵 → 灵魂，星球/幻灵 → 黑洞
+        # （原版两段判定各用一次 pseudoseed，因此互相独立）
+        if pool_kind in ("tarot", "spectral") and self.rng.roll("soul") > 0.997:
+            return "c_soul"
+        if pool_kind in ("planet", "spectral") and self.rng.roll("soul") > 0.997:
+            return "c_black_hole"
+
+        keys = consumable_data.pool(self, pool_kind)
+        if not self.any_joker("j_ring_master"):
+            keys = [k for k in keys if k not in drawn] or keys
+        return self.rng.choice(keys, pool_kind)
 
     def _random_standard_card(self) -> Card:
+        """标准包：40% 增强 / 20% 蜡封 / 版本按 poll_edition(2, no_neg) 抽。
+
+        对应 card.lua 1758-1772。概率：彩绘 1.2% / 全息 4% / 箔片 8%。
+        """
         c = Card(rank=self.rng.choice(RANKS), suit=self.rng.choice(SUITS), uid=0)
-        if self.rng.chance(8, "std_enh"):
-            c.enhanced = self.rng.choice(ENHANCED)   # card.py 的无 m_ 前缀键
-        if self.rng.chance(20, "std_ed"):
-            c.edition = self.rng.choice(["foil", "holo", "polychrome"])
-        if self.rng.chance(15, "std_seal"):
-            c.seal = self.rng.choice(["gold", "red", "blue", "purple"])
+        if self.rng.roll("stdset") > 0.6:
+            c.enhanced = self.rng.choice(ENHANCED)
+        c.edition = centers_data.poll_edition(self, mod=2, no_neg=True)
+        if self.rng.roll("stdseal") > 0.8:
+            x = self.rng.roll("stdsealtype")
+            c.seal = ("red" if x > 0.75 else
+                      "blue" if x > 0.5 else
+                      "gold" if x > 0.25 else "purple")
         return c
 
     # ------------------------------------------------------------------
@@ -103,6 +145,10 @@ class PackMixin:
         """这张卡包小丑现在能不能取走（原版 can_select_card：栏满只放行负片）。"""
         return item.negative or len(self.jokers) < self.joker_slots
 
+    def pack_consumable_fits(self) -> bool:
+        """消耗品栏还有空位取走卡包里的消耗牌。"""
+        return len(self.consumeables) < self.consumable_slots
+
     def pack_choose(self, indices: List[int]) -> str:
         """从打开的卡包中取牌，逐张结算，最多取 ``choose`` 张。
 
@@ -110,7 +156,7 @@ class PackMixin:
 
         * ``none`` —— 没有打开的卡包；
         * ``empty`` —— 没有合法序号；
-        * ``no_space`` —— 选中的小丑都因栏位已满没取到（卡包保持打开）；
+        * ``no_space`` —— 选中的牌都因栏位已满没取到（卡包保持打开）；
         * ``more`` —— 已取到牌，还能继续选；
         * ``done`` —— 已取到牌且选择次数用尽，卡包已关闭。
         """
@@ -136,6 +182,9 @@ class PackMixin:
             if kind == "buffoon" and not self.pack_joker_fits(item):
                 name = centers_data.joker_cfg(item.key)["cn"]
                 self.say(f"{name}：小丑栏已满，请先出售一张小丑再选")
+                continue
+            if kind in ("tarot", "planet", "spectral") and not self.pack_consumable_fits():
+                self.say("消耗品栏已满，请先使用或出售一张再选")
                 continue
             self._take_pack_item(item, kind)
             taken.append(i)
@@ -164,17 +213,27 @@ class PackMixin:
                 self.hand.append(self.deck.cards.pop())
             self.hologram_count += 1
             self.say(f"标准包：{item.display()} 加入牌组")
-        elif len(self.consumeables) < self.consumable_slots:
+        else:
             self.consumeables.append(item)
             self.say(f"获得消耗牌：{consumable_data.get_consumable_cn(item.key)}")
-        else:
-            self.say(f"消耗品栏已满，丢弃 {consumable_data.get_consumable_cn(item.key)}")
 
     def skip_pack(self):
-        """结束当前卡包，已经取走的牌保留（对应原版 skip_booster）。"""
+        """结束当前卡包，已经取走的牌保留（对应原版 skip_booster）。
+
+        跳过卡包会触发 ``skipping_booster``（红牌 +3 倍率）。
+        """
         pp = self.pending_pack
         if not pp:
             return
         picked = pp["picked"]
         self.pending_pack = None
         self.say(f"跳过卡包，保留已选的 {picked} 张牌" if picked else "跳过卡包")
+        self._fire_skipping_booster()
+
+    def _fire_skipping_booster(self):
+        for j in list(self.jokers):
+            if j.debuffed:
+                continue
+            if j.key == "j_red_card":
+                j.stat["mult"] = j.stat.get("mult", 0) + 3
+                self.say("红牌：跳过卡包 +3 倍率")
