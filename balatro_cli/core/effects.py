@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from typing import List
 
 from .items import JokerItem, ConsumableItem, Tag
-from .card import Card, rank_id, RANKS, SUITS, SUIT_CN
+from .card import Card, rank_id, rank_value, RANKS, SUITS, SUIT_CN
 from .hand_eval import HAND_ORDER, HAND_CN, evaluate_poker_hand
 from ..data import centers as centers_data
 from ..data import consumables as consumable_data
@@ -44,7 +44,7 @@ def _le_glass(game, j):
 
 
 def _le_hit_the_road(game, j):
-    return _fmt_x(1.0 + 0.5 * j.stat.get("jacks", 0))
+    return _fmt_x(max(1.0, 1.0 + 0.5 * j.stat.get("jacks", 0)))
 
 
 def _le_constellation(game, j):
@@ -60,10 +60,10 @@ def _le_throwback(game, j):
 
 
 def _count_enhanced(game, kind=None):
-    """统计牌组与手牌中的增强牌数；kind 为 None 时统计任意增强。"""
+    """统计全牌组（含手牌/出牌区/弃牌堆）的增强牌数；kind 为 None 时统计任意增强。"""
     def match(c):
         return bool(c.enhanced) if kind is None else c.enhanced == kind
-    return sum(1 for c in game.deck.cards if match(c)) +         sum(1 for c in game.hand if match(c))
+    return sum(1 for c in game.all_playing_cards() if match(c))
 
 
 def _le_steel_joker(game, j):
@@ -77,8 +77,8 @@ def _le_baseball(game, j):
 
 
 def _le_stencil(game, j):
-    empty = game.joker_slots - len(game.jokers)
-    return _fmt_x(float(empty)) if empty >= 1 else "无生效"
+    n = game.joker_slots - len(game.jokers) + game.count_jokers("j_stencil")
+    return _fmt_x(float(n)) if n >= 1 else "无生效"
 
 
 def _le_drivers_license(game, j):
@@ -143,7 +143,7 @@ def _le_banner(game, j):
 
 
 def _le_abstract(game, j):
-    return f"+{3 * max(0, len(game.jokers) - 1)}倍率"
+    return f"+{3 * len(game.jokers)}倍率"
 
 
 def _le_swashbuckler(game, j):
@@ -164,16 +164,25 @@ def _le_mystic_summit(game, j):
 
 
 def _le_erosion(game, j):
-    below = 52 - len(game.deck.cards)
+    below = game.starting_deck_size - len(game.all_playing_cards())
     return f"+{4 * below}倍率" if below > 0 else ""
 
 
+def _le_campfire(game, j):
+    return _fmt_x(j.stat.get("x_mult", 1.0))
+
+
 def _le_raised_fist(game, j):
-    held = [c for c in game.hand if not c.debuffed]
+    held = [c for c in game.hand if c.enhanced != "stone"]
     if not held:
         return ""
-    lowest = min(held, key=lambda c: rank_id(c.rank))
-    return f"+{2 * rank_id(lowest.rank)}倍率"
+    lowest = None
+    for c in held:
+        if lowest is None or c.get_id() <= lowest.get_id():
+            lowest = c
+    if lowest is None or lowest.debuffed:
+        return ""
+    return f"+{2 * rank_value(lowest.rank)}倍率"
 
 
 #: 小丑 key -> 实时效果文案（供 UI 预览；未登记的不显示附加信息）
@@ -193,6 +202,7 @@ _LIVE_EFFECTS = {
     "j_fortune_teller": _le_fortune_teller,
     "j_mystic_summit": _le_mystic_summit, "j_erosion": _le_erosion,
     "j_raised_fist": _le_raised_fist,
+    "j_campfire": _le_campfire,
 }
 
 
@@ -207,7 +217,8 @@ def _db_golden(game, joker):
 
 
 def _db_cloud_9(game, joker):
-    return sum(1 for c in game.deck.cards if c.rank == "9")
+    """9霄云外：统计**全牌组**（含手牌 / 出牌区 / 弃牌堆）的 9（card.lua 4191-4195）。"""
+    return sum(1 for c in game.all_playing_cards() if c.get_id() == 9)
 
 
 def _db_rocket(game, joker):
@@ -216,10 +227,6 @@ def _db_rocket(game, joker):
 
 def _db_satellite(game, joker):
     return len(game.planets_used)
-
-
-def _db_to_the_moon(game, joker):
-    return game.dollars // 5
 
 
 def _db_delayed_grat(game, joker):
@@ -231,7 +238,6 @@ _DOLLAR_BONUS = {
     "j_cloud_9": _db_cloud_9,
     "j_rocket": _db_rocket,
     "j_satellite": _db_satellite,
-    "j_to_the_moon": _db_to_the_moon,
     "j_delayed_grat": _db_delayed_grat,
 }
 
@@ -287,8 +293,7 @@ def _use_fool(game, item):
     if last and last != "c_fool" and last in consumable_data.ALL_CONSUMABLES:
         info = consumable_data.ALL_CONSUMABLES[last]
         if len(game.consumeables) < game.consumable_slots:
-            game.consumeables.append(ConsumableItem(key=last, buy_cost=info["cost"],
-                                                    sell_price=max(1, info["cost"] // 2)))
+            game.consumeables.append(ConsumableItem(key=last))
             game.say(f"愚者：生成 {consumable_data.get_consumable_cn(last)}")
         else:
             game.say("愚者：消耗品栏已满")
@@ -364,8 +369,7 @@ def _gain_joker_from_pack(game, jk, empty_msg, got):
         game.say(empty_msg)
         return
     cfg = centers_data.joker_cfg(jk)
-    game.jokers.append(JokerItem(key=jk, buy_cost=cfg["cost"],
-                                 sell_price=max(1, cfg["cost"] // 2)))
+    game.jokers.append(JokerItem(key=jk))
     game.say(got.format(cn=cfg["cn"]))
 
 
@@ -394,7 +398,6 @@ def _use_soul(game, item):
 def _use_immolate(game, item):
     n = min(5, len(game.hand))
     for c in game.rng.sample(game.hand, n):
-        game.hand.remove(c)
         game.notify_destroyed(c)
     game.dollars += 20
     game.say(f"献祭：销毁 {n} 张手牌，+$20")
@@ -484,7 +487,7 @@ def _use_ankh(game, item):
                 game.jokers.remove(v)
         if len(game.jokers) < game.joker_slots or keep.negative:
             game.jokers.append(JokerItem(key=keep.key, edition=keep.edition,
-                                         sell_price=keep.sell_price, buy_cost=keep.buy_cost,
+                                         buy_cost=keep.buy_cost, extra_value=keep.extra_value,
                                          stat=dict(keep.stat)))
         game.say("安卡：销毁其他小丑，复制 1 张")
     game.consumeables.remove(item)
@@ -548,7 +551,6 @@ def _apply_consumable(game, item: ConsumableItem) -> str:
 def _destroy_random_hand(game, n: int):
     n = min(n, len(game.hand))
     for c in game.rng.sample(game.hand, n):
-        game.hand.remove(c)
         game.notify_destroyed(c)
 
 
@@ -613,10 +615,12 @@ def _target_strength(game, targets, info):
 
 
 def _target_hanged_man(game, targets, info):
+    glass = 0
     for c in targets:
-        game.hand.remove(c)
-        game.notify_destroyed(c)
-    return f"倒吊人：销毁 {len(targets)} 张牌"
+        if c.enhanced == "glass" and not c.debuffed:
+            glass += 1
+        game.notify_destroyed(c, shattered=(c.enhanced == "glass"))
+    return f"倒吊人：销毁 {len(targets)} 张牌" + (f"（玻璃 {glass} 张）" if glass else "")
 
 
 def _target_death(game, targets, info):
@@ -703,17 +707,65 @@ def finish_consumable_target(game, target_cards: List[Card]) -> str:
 
 
 # ==========================================================================
-# 标签应用
+# 标签（Tag）
+#
+# 原版 Tag:apply_to_run(context) 按 ``config.type`` 分阶段触发，触发后立刻从
+# G.GAME.tags 里移除（tag.lua 的 yep/remove）。因此跳过盲注的**当下**就能拿到
+# 开卡包/给钱/加等级，而不是拖到进商店（button_callbacks.lua 2772-2777）。
+#
+#   immediate          Top-up / Skip / Garbage / Handy / Economy / Orbital
+#   new_blind_choice   Charm / Meteor / Ethereal / Standard / Buffoon / Boss
+#   voucher_add        Voucher
+#   round_start_bonus  Juggle
+#   store_joker_create Rare / Uncommon
+#   shop_start         D6
+#   store_joker_modify Foil / Holo / Polychrome / Negative
+#   shop_final_pass    Coupon
+#   eval               Investment
 # ==========================================================================
-def _tag_free_joker_rarity(game, tag):
-    game.pending_shop_free_joker = tag.key.split("_", 1)[1]
-    return None
+TAG_IMMEDIATE = "immediate"
+TAG_NEW_BLIND = "new_blind_choice"
+TAG_VOUCHER_ADD = "voucher_add"
+TAG_ROUND_START = "round_start_bonus"
+TAG_STORE_CREATE = "store_joker_create"
+TAG_STORE_MODIFY = "store_joker_modify"
+TAG_SHOP_START = "shop_start"
+TAG_FINAL_PASS = "shop_final_pass"
+TAG_EVAL = "eval"
 
+#: 标签 key -> 触发阶段（对应 game.lua 225-249 的 config.type）
+TAG_TYPE = {
+    "tag_top_up": TAG_IMMEDIATE,
+    "tag_skip": TAG_IMMEDIATE,
+    "tag_garbage": TAG_IMMEDIATE,
+    "tag_handy": TAG_IMMEDIATE,
+    "tag_economy": TAG_IMMEDIATE,
+    "tag_orbital": TAG_IMMEDIATE,
+    "tag_charm": TAG_NEW_BLIND,
+    "tag_meteor": TAG_NEW_BLIND,
+    "tag_ethereal": TAG_NEW_BLIND,
+    "tag_standard": TAG_NEW_BLIND,
+    "tag_buffoon": TAG_NEW_BLIND,
+    "tag_boss": TAG_NEW_BLIND,
+    "tag_voucher": TAG_VOUCHER_ADD,
+    "tag_juggle": TAG_ROUND_START,
+    "tag_rare": TAG_STORE_CREATE,
+    "tag_uncommon": TAG_STORE_CREATE,
+    "tag_d_six": TAG_SHOP_START,
+    "tag_foil": TAG_STORE_MODIFY,
+    "tag_holo": TAG_STORE_MODIFY,
+    "tag_polychrome": TAG_STORE_MODIFY,
+    "tag_negative": TAG_STORE_MODIFY,
+    "tag_coupon": TAG_FINAL_PASS,
+    "tag_investment": TAG_EVAL,
+    # tag_double 特殊：在 add_tag（tag_add 上下文）时由 Game.add_tag 直接复制
+}
 
-def _tag_noop(game, tag):
-    return None
+#: 版本类标签 -> 附加的版本
+_EDITION_TAGS = {"tag_foil": "foil", "tag_holo": "holo",
+                 "tag_polychrome": "polychrome", "tag_negative": "negative"}
 
-
+#: 开包类标签 -> 卡包键
 _TAG_PACK = {
     "tag_standard": "p_standard_mega",
     "tag_charm": "p_arcana_mega",
@@ -723,100 +775,172 @@ _TAG_PACK = {
 }
 
 
-def _tag_open_pack(game, tag):
-    from ..data import boosters as bd
-    pk = _TAG_PACK[tag.key]
-    game.say(f"{tag.key and _tag_cn(tag)}：开启 {bd.BOOSTERS[pk]['cn']}")
-    game._open_pack_now(pk, free=True)
-
-
-def _tag_handy(game, tag):
-    game.dollars += game.hands_left
-    game.say(f"{_tag_cn(tag)}：+${game.hands_left}")
-
-
-def _tag_garbage(game, tag):
-    game.dollars += game.discards_left
-    game.say(f"{_tag_cn(tag)}：+${game.discards_left}")
-
-
-def _tag_boss(game, tag):
-    game.boss_key = game._get_new_boss()
-    game.say(f"头目标签：重掷头目为 {blind_boss_cn(game)}")
-
-
-def _tag_top_up(game, tag):
-    for _ in range(2):
-        jk = centers_data.random_joker_key(game)
-        if len(game.jokers) < game.joker_slots:
-            cfg = centers_data.joker_cfg(jk)
-            game.jokers.append(JokerItem(key=jk, buy_cost=cfg["cost"],
-                                         sell_price=max(1, cfg["cost"] // 2)))
-    game.say(f"{_tag_cn(tag)}：获得 2 张小丑")
-
-
-def _tag_skip(game, tag):
-    game.dollars += 5 * game.skips
-    game.say(f"{_tag_cn(tag)}：+${5 * game.skips}")
-
-
-def _tag_orbital(game, tag):
-    h = game.rng.choice(list(game.hand_levels))
-    game.hand_levels[h] += 3
-    game.say(f"{_tag_cn(tag)}：{HAND_CN.get(h, h)} 等级 +3")
-
-
-def _tag_economy(game, tag):
-    gain = min(game.dollars, 40)
-    game.dollars += gain
-    game.say(f"{_tag_cn(tag)}：+${gain}")
-
-
-def _tag_juggle(game, tag):
-    # 对应 Lua 的 round_start_bonus：+3 只作用于下一个回合，回合结束回退
-    game.temp_hand_size += 3
-
-
 def _tag_cn(tag) -> str:
     return tag_data.TAGS.get(tag.key, {}).get("cn", tag.key)
 
 
-#: 标签 key -> handler。值固定为 None 的是「已生效但不需要动作」的标签。
+def _tag_top_up(game, tag):
+    # 原版 create_card('Joker', ..., _rarity = 0) → 稀有度被归一到 1（普通小丑）
+    got = []
+    for _ in range(2):
+        if len(game.jokers) >= game.joker_slots:
+            break
+        key = centers_data.random_joker_key(game, rarity=1)
+        game.jokers.append(JokerItem(key=key))
+        got.append(centers_data.joker_cfg(key)["cn"])
+    game.say(f"{_tag_cn(tag)}：获得小丑 {('、'.join(got)) or '（栏位已满）'}")
+
+
+def _tag_skip(game, tag):
+    gain = 5 * game.skips
+    game.dollars += gain
+    game.say(f"{_tag_cn(tag)}：+${gain}")
+
+
+def _tag_garbage(game, tag):
+    gain = game.unused_discards
+    game.dollars += gain
+    game.say(f"{_tag_cn(tag)}：+${gain}（本局累计未使用弃牌 {game.unused_discards}）")
+
+
+def _tag_handy(game, tag):
+    gain = game.hands_played_total
+    game.dollars += gain
+    game.say(f"{_tag_cn(tag)}：+${gain}（本局已打出 {game.hands_played_total} 手）")
+
+
+def _tag_economy(game, tag):
+    gain = min(40, max(0, game.dollars))
+    game.dollars += gain
+    game.say(f"{_tag_cn(tag)}：+${gain}")
+
+
+def _tag_orbital(game, tag):
+    h = game.rng.choice(game.visible_hands())
+    game.hand_levels[h] += 3
+    game.say(f"{_tag_cn(tag)}：{HAND_CN.get(h, h)} 等级 +3")
+
+
+def _tag_open_pack(game, tag):
+    from ..data import boosters as bd
+    pk = _TAG_PACK[tag.key]
+    game.say(f"{_tag_cn(tag)}：开启 {bd.BOOSTERS[pk]['cn']}")
+    game._open_pack_now(pk, free=True)
+
+
+def _tag_boss(game, tag):
+    # 对应 tag.lua 284-301：免费重掷一次头目（不花 $10）
+    game.reroll_boss(free=True)
+
+
+def _tag_voucher(game, tag):
+    # 对应 tag.lua 302-318：在商店里额外加 1 张优惠券（不是把当前那张变免费）
+    game.pending_extra_voucher = True
+    game.say(f"{_tag_cn(tag)}：本底注商店多 1 张优惠券")
+
+
+def _tag_juggle(game, tag):
+    # round_start_bonus：下一个回合抽牌前手牌上限 +3，回合结束回退
+    game.temp_hand_size += 3
+    game.say(f"{_tag_cn(tag)}：本回合手牌上限 +3")
+
+
+def _tag_d_six(game, tag):
+    game.temp_reroll_cost = 0
+    game.say(f"{_tag_cn(tag)}：本商店重掷免费")
+
+
+def _tag_coupon(game, tag):
+    # 对应 tag.lua 447-465：只把**当前已生成**的商品置为免费（重掷出的新商品不免费，
+    # 优惠券本身也不在其中）。
+    if game.shop_free:
+        return False
+    game.shop_free = True
+    for item in game.shop_jokers:
+        item.couponed = True
+    for bp in game.shop_boosters:
+        bp.couponed = True
+    game.say(f"{_tag_cn(tag)}：当前商店商品全部免费")
+    return None
+
+
+def _tag_investment(game, tag):
+    game.investment_tag_active = True
+
+
+#: key -> handler（只登记需要动作的阶段；其余是「已生效但无需动作」）
 _TAG_HANDLERS = {
-    "tag_uncommon": _tag_free_joker_rarity,
-    "tag_rare": _tag_free_joker_rarity,
-    "tag_foil": _tag_noop,          # 由 _make_joker_for_shop 消费
-    "tag_holo": _tag_noop,
-    "tag_polychrome": _tag_noop,
-    "tag_negative": _tag_noop,
-    "tag_double": _tag_noop,        # 由 Game.add_tag 在获得时复制
-    "tag_investment": lambda g, t: setattr(g, "investment_tag_active", True),
-    "tag_voucher": lambda g, t: setattr(g, "pending_free_voucher", True),
-    "tag_coupon": lambda g, t: setattr(g, "shop_free", True),
-    "tag_d_six": lambda g, t: setattr(g, "temp_reroll_cost", 0),
-    "tag_boss": _tag_boss,
+    "tag_top_up": _tag_top_up,
+    "tag_skip": _tag_skip,
+    "tag_garbage": _tag_garbage,
+    "tag_handy": _tag_handy,
+    "tag_economy": _tag_economy,
+    "tag_orbital": _tag_orbital,
     "tag_standard": _tag_open_pack,
     "tag_charm": _tag_open_pack,
     "tag_meteor": _tag_open_pack,
     "tag_buffoon": _tag_open_pack,
     "tag_ethereal": _tag_open_pack,
-    "tag_handy": _tag_handy,
-    "tag_garbage": _tag_garbage,
-    "tag_top_up": _tag_top_up,
-    "tag_skip": _tag_skip,
-    "tag_orbital": _tag_orbital,
-    "tag_economy": _tag_economy,
+    "tag_boss": _tag_boss,
+    "tag_voucher": _tag_voucher,
     "tag_juggle": _tag_juggle,
+    "tag_d_six": _tag_d_six,
+    "tag_coupon": _tag_coupon,
+    "tag_investment": _tag_investment,
 }
 
 
-def apply_tag(game, tag: Tag):
-    handler = _TAG_HANDLERS.get(tag.key)
-    if handler is None:
-        game.say(f"应用标签：{_tag_cn(tag)}")
-        return
-    handler(game, tag)
+def apply_tag(game, tag: Tag, context: str) -> bool:
+    """按阶段应用一个标签；返回是否已触发（触发后从收藏里移除）。
 
+    未到该阶段的标签原样保留在 :attr:`Game.tags` 里，等下一个阶段再结算。
+    """
+    if TAG_TYPE.get(tag.key) != context:
+        return False
+    handler = _TAG_HANDLERS.get(tag.key)
+    if handler is not None and handler(game, tag) is False:
+        return False
+    for i, t in enumerate(game.tags):
+        if t is tag:
+            game.tags.pop(i)
+            break
+    return True
+
+
+def edition_tag_for_couponed(game) -> str | None:
+    """取出第一张版本类标签对应的版本（``store_joker_modify`` 上下文）。
+
+    命中后消耗该标签并返回版本键；没有版本标签时返回 None。
+    """
+    for tag in list(game.tags):
+        if TAG_TYPE.get(tag.key) == TAG_STORE_MODIFY:
+            for i, t in enumerate(game.tags):
+                if t is tag:
+                    game.tags.pop(i)
+                    break
+            return _EDITION_TAGS[tag.key]
+    return None
+
+
+def forced_rarity_tag(game) -> int | None:
+    """取出「罕见/稀有标签」，返回它要求的稀有度（``store_joker_create``）。
+
+    对应 tag.lua 344-381：下一个生成的商店商品被替换成指定稀有度的小丑并免费。
+    """
+    for tag in list(game.tags):
+        if tag.key == "tag_rare":
+            for i, t in enumerate(game.tags):
+                if t is tag:
+                    game.tags.pop(i)
+                    break
+            return 3
+        if tag.key == "tag_uncommon":
+            for i, t in enumerate(game.tags):
+                if t is tag:
+                    game.tags.pop(i)
+                    break
+            return 2
+    return None
 
 def blind_boss_cn(game) -> str:
     from ..data.blinds import get_blind_cfg
@@ -925,8 +1049,7 @@ def _bs_riff_raff(game, j, ctx):
         if len(game.jokers) < game.joker_slots:
             jk = centers_data.random_joker_key(game, rarity=1)
             cfg = centers_data.joker_cfg(jk)
-            game.jokers.append(JokerItem(key=jk, buy_cost=cfg["cost"],
-                                         sell_price=max(1, cfg["cost"] // 2)))
+            game.jokers.append(JokerItem(key=jk))
             game.say(f"乌合之众：获得 {cfg['cn']}")
 
 
@@ -937,21 +1060,28 @@ def _bs_marble(game, j, ctx):
 
 
 def _bs_ceremonial(game, j, ctx):
+    """仪式匕首：只销毁右侧**非永恒**小丑；右侧是永恒时什么都不做（card.lua 2561-2579）。"""
     victims = list(game.jokers[_joker_index(game, j) + 1:])
     if not victims:
         return
     victim = victims[0]
-    gain = victim.sell_value() * 2
+    if victim.eternal:
+        game.say(f"典礼匕首：{joker_cn(victim.key)} 是永恒小丑，无法销毁")
+        return
+    gain = victim.sell_value(game.inflation, game.discount_percent) * 2
     j.stat["mult"] = j.stat.get("mult", 0) + gain
     game.jokers.remove(victim)
     game.say(f"典礼匕首：销毁 {joker_cn(victim.key)}，+{gain} 倍率")
 
 
 def _bs_madness(game, j, ctx):
+    """疯狂：只在**小盲/大盲**选择时触发，头目盲注不触发（card.lua 2503-2521）。"""
+    if game.blind_on_deck == "Boss" or game.current_blind_key() in blind_data.BOSS_BLINDS:
+        return
     j.stat["x_mult"] = j.stat.get("x_mult", 1.0) + 0.5
     others = [x for x in game.jokers if x is not j and not x.eternal]
     if others:
-        victim = game.rng.choice(others)
+        victim = game.rng.choice(others, "madness")
         game.jokers.remove(victim)
         game.say("疯狂：+×0.5 倍率，销毁 1 张小丑")
 
@@ -967,12 +1097,6 @@ def _bs_burglar(game, j, ctx):
     game.say("盗贼：+3 手牌，失去全部弃牌")
 
 
-def _bs_certificate(game, j, ctx):
-    game.hand.append(_random_card(game, seal=True))
-    game.sort_hand()
-    game.say("证书：随机蜡封牌入手")
-
-
 def _bs_troubadour(game, j, ctx):
     game.hands_left = max(1, game.hands_left - 1)
 
@@ -986,23 +1110,44 @@ def _bs_drunkard(game, j, ctx):
 
 
 def _bs_todo(game, j, ctx):
-    j.stat["todo"] = game.rng.choice(list(HAND_ORDER))
+    """待办清单：从可见牌型里随机选一个，并排除上一轮的目标（card.lua 2975-2983）。"""
+    pool = [h for h in game.visible_hands() if h != j.stat.get("todo")]
+    j.stat["todo"] = game.rng.choice(pool or game.visible_hands(), "todo")
 
 
 def _bs_suit(game, j, ctx):
-    j.stat["suit"] = game.rng.choice(SUITS)
+    """古老小丑 / 城堡：随机选一个**与上一轮不同**的花色。
+
+    原版从牌组里实际存在的花色（城堡取非石头牌的花色）中抽，
+    这里同样按牌组花色过滤（common_events.lua 2303-2324）。
+    """
+    present = [s for s in SUITS
+               if any(c.is_suit(s, bypass_debuff=True) for c in game.all_playing_cards())]
+    pool = [s for s in (present or list(SUITS)) if s != j.stat.get("suit")]
+    j.stat["suit"] = game.rng.choice(pool or present or list(SUITS), "suit")
 
 
 def _bs_idol(game, j, ctx):
-    j.stat["card"] = (game.rng.choice(RANKS), game.rng.choice(SUITS))
+    """偶像：从牌组里随机选一张**非石头牌**，取它的点数+花色（common_events 2271-2286）。"""
+    pool = [c for c in game.all_playing_cards() if c.enhanced != "stone"]
+    if pool:
+        c = game.rng.choice(pool, "idol")
+        j.stat["card"] = (c.rank, c.suit)
+    else:
+        j.stat["card"] = (game.rng.choice(RANKS), game.rng.choice(SUITS))
 
 
 def _bs_mail(game, j, ctx):
-    j.stat["rank"] = game.rng.choice(RANKS)
+    """邮件回扣：从牌组里随机选一张**非石头牌**，取它的点数（common_events 2288-2301）。"""
+    pool = [c for c in game.all_playing_cards() if c.enhanced != "stone"]
+    if pool:
+        j.stat["rank"] = game.rng.choice(pool, "mail").rank
+    else:
+        j.stat["rank"] = game.rng.choice(RANKS)
 
 
 #: key -> (handler, 可被蓝图复制)。希科/疯狂/典礼匕首带守卫；
-#: 乌合之众/大理石/占卜师/盗贼/证书在原版没有守卫，可被转发。
+#: 乌合之众/大理石/占卜师/盗贼在原版没有守卫，可被转发。
 _BLIND_SELECT_HOOKS = {
     "j_riff_raff": (_bs_riff_raff, True),
     "j_marble": (_bs_marble, True),
@@ -1010,7 +1155,6 @@ _BLIND_SELECT_HOOKS = {
     "j_madness": (_bs_madness, False),
     "j_cartomancer": (_bs_cartomancer, True),
     "j_burglar": (_bs_burglar, True),
-    "j_certificate": (_bs_certificate, True),
     "j_troubadour": (_bs_troubadour, False),
     "j_merry_andy": (_bs_merry_andy, False),
     "j_drunkard": (_bs_drunkard, False),
@@ -1029,6 +1173,33 @@ def on_blind_select(game):
     _hook_walk(game, HookCtx(), _blind_select_fx)
 
 
+# ---- 首次抽牌（first_hand_drawn）----
+def _fh_certificate(game, j, ctx):
+    """证书：本回合**首次抽牌之后**额外加 1 张带随机蜡封的牌（card.lua 2462-2482）。
+
+    加牌发生在补牌之后，因此手牌可以超过上限 1 张；同时触发「有牌加入牌组」
+    的钩子（全息影像 +×0.25）。
+    """
+    card = _random_card(game, seal=True)
+    game.deck.add(card)
+    game.hand.append(card)
+    game.hologram_count += 1
+    game.sort_hand()
+    game.say(f"证书：{card.display()} 入手")
+
+
+_FIRST_HAND_HOOKS = {
+    "j_certificate": (_fh_certificate, True),
+}
+
+_first_hand_fx = _make_hook(_FIRST_HAND_HOOKS)
+
+
+def on_first_hand_drawn(game):
+    """本回合首次抽牌结束（对应 state_events.lua 3226-3229 的 first_hand_drawn）。"""
+    _hook_walk(game, HookCtx(), _first_hand_fx)
+
+
 # ---- 弃牌 ----
 def _dc_yorick(game, j, ctx):
     j.stat["discards"] = j.stat.get("discards", 0) + len(ctx.discarded)
@@ -1041,7 +1212,15 @@ def _dc_hit_the_road(game, j, ctx):
 
 
 def _dc_ramen(game, j, ctx):
-    j.stat["lost"] = j.stat.get("lost", 0.0) + 0.01 * len(ctx.discarded)
+    """拉面：每弃 1 张 -×0.01，降到 ×1 时销毁（card.lua 2757-2786）。"""
+    cur = j.stat.get("x_mult", 2.0)
+    step = 0.01 * len(ctx.discarded)
+    if cur - step <= 1.0:
+        if j in game.jokers:
+            game.jokers.remove(j)
+        game.say("拉面吃完了！")
+    else:
+        j.stat["x_mult"] = cur - step
 
 
 def _dc_mail(game, j, ctx):
@@ -1058,13 +1237,13 @@ def _dc_castle(game, j, ctx):
         j.stat["chips"] = j.stat.get("chips", 0) + 3 * n
 
 
-def _dc_reserved_parking(game, j, ctx):
-    faces = [c for c in game.hand if is_face_card(c, game)]
-    for _ in faces:
-        if roll_prob(game, 2, "parking"):
-            game.dollars += 1
-    if faces:
-        game.say("预留车位：+$")
+def _dc_green_joker(game, j, ctx):
+    """绿色小丑：每弃 1 次牌 -1 倍率（card.lua 2846-2856）。
+
+    原版按 ``other_card == full_hand[1]`` 守卫，一次弃牌只扣一次；这里
+    ``on_discard`` 本身每批只调用一次，因此直接减 1。
+    """
+    j.stat["mult"] = j.stat.get("mult", 0) - 1
 
 
 def _dc_faceless(game, j, ctx):
@@ -1077,8 +1256,8 @@ def _dc_faceless(game, j, ctx):
 def _dc_trading(game, j, ctx):
     if game.discards_used_round == 0 and len(ctx.discarded) == 1:
         c = ctx.discarded[0]
-        # 牌此刻在 _round_cards，不在 deck.cards；须 notify_destroyed 标记销毁，
-        # 回合结束才不会被回收（人头牌计入卡尼奥）
+        # 牌此刻在 _round_cards；notify_destroyed 会把它从待回收区移除，
+        # 回合结束便不会回到牌组（人头牌同时计入卡尼奥）
         game.notify_destroyed(c)
         game.dollars += 3
         game.say("交易卡：销毁该牌 +$3")
@@ -1106,7 +1285,7 @@ _DISCARD_HOOKS = {
     "j_ramen": (_dc_ramen, False),
     "j_mail": (_dc_mail, True),
     "j_castle": (_dc_castle, False),
-    "j_reserved_parking": (_dc_reserved_parking, False),
+    "j_green_joker": (_dc_green_joker, False),
     "j_faceless": (_dc_faceless, True),
     "j_trading": (_dc_trading, False),
     "j_burnt": (_dc_burnt, True),
@@ -1122,14 +1301,14 @@ def on_discard(game, discarded: List[Card]):
 
 # ---- 回合结束 ----
 def _er_egg(game, j, ctx):
-    j.sell_price += 3
+    j.extra_value += 3
 
 
 def _er_gift(game, j, ctx):
     for x in game.jokers:
-        x.sell_price += 1
+        x.extra_value += 1
     for x in game.consumeables:
-        x.sell_price += 1
+        x.extra_value += 1
 
 
 def _er_rocket(game, j, ctx):
@@ -1139,19 +1318,53 @@ def _er_rocket(game, j, ctx):
 
 
 def _er_gros_michel(game, j, ctx):
-    if game.rng.chance(6, "gros"):
-        game.jokers.remove(j)
-        game.say("格罗斯米歇尔碎了！")
+    # 1/6 概率灭绝（吃六六大顺）；灭绝后卡池标记置位，卡文迪许才会出现
+    if roll_prob(game, 6, "gros_michel"):
+        if j in game.jokers:
+            game.jokers.remove(j)
+        game.pool_flags["gros_michel_extinct"] = True
+        game.say("大麦克香蕉灭绝了！")
 
 
 def _er_cavendish(game, j, ctx):
-    if game.rng.chance(1000, "cav"):
-        game.jokers.remove(j)
+    if roll_prob(game, 1000, "cavendish"):
+        if j in game.jokers:
+            game.jokers.remove(j)
         game.say("卡文迪许消失了！")
 
 
+def _er_popcorn(game, j, ctx):
+    """爆米花：每**回合** -4，降到 0 销毁（card.lua 2945-2975）。"""
+    left = j.stat.get("mult", 20) - 4
+    if left <= 0:
+        if j in game.jokers:
+            game.jokers.remove(j)
+        game.say("爆米花吃完了！")
+    else:
+        j.stat["mult"] = left
+
+
+def _er_hit_the_road(game, j, ctx):
+    """上路吧杰克：每回合结束把本回合累计的 J 清零（card.lua 3011-3017）。"""
+    j.stat["jacks"] = 0
+
+
+def _er_campfire(game, j, ctx):
+    """篝火：击败头目后重置为 ×1（card.lua 2889-2895）。"""
+    if ctx.boss_beaten and j.stat.get("x_mult", 1.0) > 1:
+        j.stat["x_mult"] = 1.0
+        game.say("篝火：被头目浇灭，倍率重置为 ×1")
+
+
 def _er_turtle_bean(game, j, ctx):
-    # 每轮 -1 记在 stat 里（累计），下一回合由 round_hand_size 重新汇总
+    # 每轮 -1 记在 stat 里（累计），下一回合由 round_hand_size 重新汇总；
+    # 降到 0 时销毁（card.lua 2903-2933）
+    left = 5 + j.stat.get("hand_size", 0) - 1
+    if left <= 0:
+        if j in game.jokers:
+            game.jokers.remove(j)
+        game.say("黑龟豆吃完了！")
+        return
     j.stat["hand_size"] = j.stat.get("hand_size", 0) - 1
     game.change_hand_size(-1, persistent=False)
 
@@ -1171,8 +1384,11 @@ _END_ROUND_HOOKS = {
     "j_egg": (_er_egg, False),
     "j_gift": (_er_gift, False),
     "j_rocket": (_er_rocket, False),
+    "j_campfire": (_er_campfire, False),
     "j_gros_michel": (_er_gros_michel, False),
     "j_cavendish": (_er_cavendish, False),
+    "j_popcorn": (_er_popcorn, False),
+    "j_hit_the_road": (_er_hit_the_road, False),
     "j_turtle_bean": (_er_turtle_bean, False),
     "j_invisible": (_er_invisible, False),
 }
@@ -1190,14 +1406,18 @@ def on_end_round(game, boss_beaten: bool = False):
         _hook_one(game, j, ctx, _end_round_fx)
         k = j.key
         if j.rental and not j.eternal:
-            cost = j.sell_value()
+            # 租金是固定 $3（G.GAME.rental_rate），不是按卖价收（card.lua 2271-2275）
+            cost = 3
             game.dollars = max(0, game.dollars - cost)
             game.say(f"租用小丑 {joker_cn(k)}：-${cost}")
         if j.perishable and not j.eternal:
-            j.perish_tally -= 1
-            if j.perish_tally <= 0:
-                game.jokers.remove(j)
-                game.say(f"{joker_cn(k)} 已过期消失")
+            # 易腐小丑 5 轮后**被禁用**而不是消失（card.lua 2278-2289）
+            if j.perish_tally == 1:
+                j.perish_tally = 0
+                j.debuffed = True
+                game.say(f"{joker_cn(k)} 已过期（效果禁用）")
+            else:
+                j.perish_tally -= 1
 
 
 def _shop_closed_fx(game, j, ctx):
@@ -1215,7 +1435,7 @@ def _shop_closed_fx(game, j, ctx):
         if game.consumeables:
             c = game.rng.choice(game.consumeables)
             game.consumeables.append(ConsumableItem(key=c.key, edition="negative",
-                                                    buy_cost=c.buy_cost, sell_price=c.sell_price))
+                                                    buy_cost=c.buy_cost, extra_value=c.extra_value))
             game.say("珀可：复制 1 张消耗牌（负片）")
 
 
@@ -1225,7 +1445,11 @@ def on_shop_closed(game):
 
 
 def _sell_luchador(game, j, ctx):
-    # 摔跤手没有蓝图守卫，被蓝图转发时照样生效
+    # 摔跤手没有蓝图守卫，被蓝图转发时照样生效；
+    # 但只有「当前正在打头目盲注」时才有效（card.lua 2354-2360）
+    if game.current_blind_key() not in blind_data.BOSS_BLINDS:
+        game.say("摔跤手：当前不是头目盲注，没有可禁用的效果")
+        return
     if game.disable_current_blind():
         game.say("摔跤手：禁用当前头目盲注效果")
     else:
@@ -1282,8 +1506,22 @@ def on_sell_joker(game, sold):
     收到 context，但蓝图会把它转发给自己右侧的小丑——所以卖掉贴着摔跤手的
     蓝图同样能禁用当前头目盲注、卖掉贴着零糖可乐的蓝图同样能拿到双重标签，
     而隐形小丑带蓝图守卫，转发不会触发复制。
+
+    卖出**任意**卡牌还会触发 ``selling_card``（篝火 +×0.25），见
+    :func:`on_sell_card`。
     """
     _hook_one(game, sold, HookCtx(), _sell_fx)
+    on_sell_card(game)
+
+
+def on_sell_card(game):
+    """卖出任意卡牌（``selling_card`` 上下文）：篝火 +×0.25（card.lua 2395-2401）。"""
+    for j in list(game.jokers):
+        if j.debuffed:
+            continue
+        if j.key == "j_campfire":
+            j.stat["x_mult"] = j.stat.get("x_mult", 1.0) + 0.25
+            game.say(f"篝火：+×0.25（当前 ×{j.stat['x_mult']:.2f}）")
 
 
 def _reroll_fx(game, j, ctx):

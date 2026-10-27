@@ -12,7 +12,7 @@ from typing import List
 
 from .scoring import Effect, Ctx
 from .items import JokerItem
-from .card import Card, rank_id
+from .card import Card, rank_id, rank_value
 from .hand_eval import HAND_CN
 from ..data import centers as centers_data
 from .lookup import roll_prob
@@ -55,10 +55,18 @@ def contains_hand(actual: str, target: str) -> bool:
     return actual in _CONTAINS.get(target, set())
 
 
-def is_face_card(card: Card, game) -> bool:
+def is_face_card(card: Card, game, from_boss: bool = False) -> bool:
+    """这张牌此刻是否算人头牌（叠加幻视 Pareidolia）。
+
+    对应 card.lua 的 ``Card:is_face(from_boss)``：被禁用的牌先返回 false
+    （``from_boss=True`` 时跳过这一步，供头目自己判断要不要禁用），然后才是
+    ``id == 11/12/13`` 或持有幻视。石头牌 ``get_id()`` 为负，自然不算。
+    """
+    if card.debuffed and not from_boss:
+        return False
     if game.any_joker("j_pareidolia"):
         return True
-    return card.is_face()
+    return card.is_face(from_boss=from_boss)
 
 def calculate_joker(game, joker: JokerItem, ctx: Ctx) -> List[Effect]:
     fn = JOKER_FX.get(joker.key)
@@ -149,11 +157,13 @@ def fx_j_half(game, j, ctx):
 
 
 def fx_j_stencil(game, j, ctx):
+    """模具小丑：空槽数 + 模具小丑自身数量（card.lua 4203-4207）。"""
     if ctx.phase != "joker_main":
         return []
     empty = game.joker_slots - len(game.jokers)
-    if empty >= 1:
-        return [_E(x_mult=empty)]
+    n = empty + game.count_jokers("j_stencil")
+    if n >= 1:
+        return [_E(x_mult=float(n))]
     return []
 
 
@@ -179,14 +189,31 @@ def fx_j_misprint(game, j, ctx):
     return []
 
 
+def lowest_held_card(game) -> Card | None:
+    """致胜之拳锁定的那张手牌：点数最低的非石头牌（并列取靠后的一张）。
+
+    对应 card.lua 3320-3325 的循环：``temp_ID >= base.id`` 用「大于等于」，
+    因此并列时会选中后面那张；石头牌被 ``ability.effect ~= 'Stone Card'`` 排除。
+    """
+    lowest = None
+    for c in game.hand:
+        if c.enhanced == "stone":
+            continue
+        if lowest is None or c.get_id() <= lowest.get_id():
+            lowest = c
+    return lowest
+
+
 def fx_j_raised_fist(game, j, ctx):
-    if ctx.phase != "individual" or not ctx.hand_being_evaluated:
+    """致胜之拳：只对**手里点数最低的那张牌**生效一次；A=11、J/Q/K=10（card.lua 3320-3340）。"""
+    if ctx.phase != "individual" or not ctx.hand_being_evaluated or ctx.other_card is None:
         return []
-    held = [c for c in game.hand if not c.debuffed]
-    if not held:
+    target = lowest_held_card(game)
+    if target is None or target is not ctx.other_card:
         return []
-    lowest = min(held, key=lambda c: rank_id(c.rank))
-    return [_E(mult=2 * rank_id(lowest.rank))]
+    if target.debuffed:
+        return []
+    return [_E(mult=2 * rank_value(target.rank))]
 
 
 def fx_j_scary_face(game, j, ctx):
@@ -197,37 +224,51 @@ def fx_j_scary_face(game, j, ctx):
 
 
 def fx_j_abstract(game, j, ctx):
+    """抽象小丑：统计**所有**小丑，包括自己（card.lua 的计数循环）。"""
     if ctx.phase == "joker_main":
-        return [_E(mult=3 * max(0, len(game.jokers) - 1))]
+        return [_E(mult=3 * len(game.jokers))]
+    return []
+
+
+def fx_j_reserved_parking(game, j, ctx):
+    """预留车位：每张**手持**人头牌在计分时各有 1/2 概率 +$1（card.lua 3302-3319）。"""
+    if ctx.phase != "individual" or not ctx.hand_being_evaluated or ctx.other_card is None:
+        return []
+    c = ctx.other_card
+    if not c.is_face() or c.debuffed:
+        return []
+    if roll_prob(game, 2, "parking"):
+        return [_E(dollars=1)]
     return []
 
 
 def fx_j_even_steven(game, j, ctx):
     if ctx.phase == "individual" and ctx.other_card and not ctx.hand_being_evaluated:
-        rid = rank_id(ctx.other_card.rank)
+        rid = ctx.other_card.get_id()
         if rid in (2, 4, 6, 8, 10):
             return [_E(mult=4)]
     return []
 
 
 def fx_j_odd_todd(game, j, ctx):
+    """奇数托德：只对 3/5/7/9/A（id 3/5/7/9/14）生效，J 的 id 是 11 因此不触发。"""
     if ctx.phase == "individual" and ctx.other_card and not ctx.hand_being_evaluated:
-        rid = rank_id(ctx.other_card.rank)
-        if rid in (3, 5, 7, 9, 11, 14):
+        rid = ctx.other_card.get_id()
+        if rid in (3, 5, 7, 9, 14):
             return [_E(chips=31)]
     return []
 
 
 def fx_j_scholar(game, j, ctx):
     if ctx.phase == "individual" and ctx.other_card and not ctx.hand_being_evaluated:
-        if ctx.other_card.rank == "A":
+        if ctx.other_card.get_id() == 14:
             return [_E(chips=20, mult=4)]
     return []
 
 
 def fx_j_fibonacci(game, j, ctx):
     if ctx.phase == "individual" and ctx.other_card and not ctx.hand_being_evaluated:
-        rid = rank_id(ctx.other_card.rank)
+        rid = ctx.other_card.get_id()
         if rid in (14, 2, 3, 5, 8):
             return [_E(mult=8)]
     return []
@@ -240,6 +281,8 @@ def fx_j_supernova(game, j, ctx):
 
 
 def fx_j_runner(game, j, ctx):
+    if ctx.blueprint:
+        return []
     if ctx.phase == "joker_main":
         if contains_hand(ctx.scoring_name, "Straight"):
             j.stat["chips"] = j.stat.get("chips", 0) + 15
@@ -248,9 +291,18 @@ def fx_j_runner(game, j, ctx):
 
 
 def fx_j_ice_cream(game, j, ctx):
+    if ctx.blueprint:
+        return []
+    """冰淇淋：本次计分先按当前筹码给分，计分后 -5；降到 0 时销毁（card.lua 3571-3599）。"""
     if ctx.phase == "joker_main":
-        j.stat["chips"] = j.stat.get("chips", 100) - 5
-        return [_E(chips=max(0, j.stat["chips"]))]
+        return [_E(chips=j.stat.get("chips", 100))]
+    if ctx.phase == "after":
+        left = j.stat.get("chips", 100) - 5
+        if left <= 0:
+            if j in game.jokers:
+                game.jokers.remove(j)
+            return [_E(message="冰淇淋融化了！")]
+        j.stat["chips"] = left
     return []
 
 
@@ -261,9 +313,12 @@ def fx_j_blue_joker(game, j, ctx):
 
 
 def fx_j_green_joker(game, j, ctx):
-    if ctx.phase == "after":
+    if ctx.blueprint:
+        return []
+    """绿色小丑：每打一手**前** +1，每弃一次牌 -1（card.lua 2846、3563-3569）。"""
+    if ctx.phase == "before":
         j.stat["mult"] = j.stat.get("mult", 0) + 1
-    if ctx.phase == "joker_main":
+    elif ctx.phase == "joker_main":
         return [_E(mult=j.stat.get("mult", 0))]
     return []
 
@@ -275,6 +330,8 @@ def fx_j_todo_list(game, j, ctx):
 
 
 def fx_j_square(game, j, ctx):
+    if ctx.blueprint:
+        return []
     if ctx.phase == "joker_main":
         if len(ctx.played_cards) == 4:
             j.stat["chips"] = j.stat.get("chips", 0) + 4
@@ -289,19 +346,21 @@ def fx_j_bull(game, j, ctx):
 
 
 def fx_j_popcorn(game, j, ctx):
+    """爆米花：每**回合** -4（end_of_round 里扣），降到 0 销毁；本手只读当前值。"""
     if ctx.phase == "joker_main":
-        j.stat["mult"] = j.stat.get("mult", 20) - 4
-        return [_E(mult=max(0, j.stat["mult"]))]
+        return [_E(mult=j.stat.get("mult", 20))]
     return []
 
 
 def fx_j_ramen(game, j, ctx):
     if ctx.phase == "joker_main":
-        return [_E(x_mult=max(1.0, 2.0 - j.stat.get("lost", 0.0)))]
+        return [_E(x_mult=max(1.0, j.stat.get("x_mult", 2.0)))]
     return []
 
 
 def fx_j_trousers(game, j, ctx):
+    if ctx.blueprint:
+        return []
     if ctx.phase == "joker_main":
         if contains_hand(ctx.scoring_name, "Two Pair"):
             j.stat["mult"] = j.stat.get("mult", 0) + 2
@@ -338,7 +397,7 @@ def fx_j_swashbuckler(game, j, ctx):
 
 def fx_j_shoot_the_moon(game, j, ctx):
     if ctx.phase == "individual" and ctx.hand_being_evaluated and ctx.other_card:
-        if ctx.other_card.rank == "Q" and not ctx.other_card.debuffed:
+        if ctx.other_card.get_id() == 12 and not ctx.other_card.debuffed:
             return [_E(mult=13)]
     return []
 
@@ -352,15 +411,14 @@ def fx_j_smiley(game, j, ctx):
 
 def fx_j_walkie_talkie(game, j, ctx):
     if ctx.phase == "individual" and ctx.other_card and not ctx.hand_being_evaluated:
-        if ctx.other_card.rank in ("10", "4"):
+        if ctx.other_card.get_id() in (10, 4):
             return [_E(chips=10, mult=4)]
     return []
 
 
 def fx_j_stone(game, j, ctx):
     if ctx.phase == "joker_main":
-        n = sum(1 for c in game.deck.cards if c.enhanced == "stone")
-        n += sum(1 for c in game.hand if c.enhanced == "stone")
+        n = sum(1 for c in game.all_playing_cards() if c.enhanced == "stone")
         return [_E(chips=n * 25)]
     return []
 
@@ -412,12 +470,19 @@ def fx_j_acrobat(game, j, ctx):
 
 
 def fx_j_selzer(game, j, ctx):
+    if ctx.blueprint:
+        return []
+    """苏打水：接下来 10 手内所有打出的牌重触发一次，用尽后销毁（card.lua 3601-3630）。"""
     if ctx.phase == "repetition" and ctx.other_card and not ctx.hand_being_evaluated:
-        if j.stat.get("hands_left", 10) > 0:
+        if j.stat.get("uses", 10) > 0:
             return [_E(repetitions=1)]
     if ctx.phase == "after":
-        if j.stat.get("hands_left", 10) > 0:
-            j.stat["hands_left"] = j.stat.get("hands_left", 10) - 1
+        left = j.stat.get("uses", 10) - 1
+        if left <= 0:
+            if j in game.jokers:
+                game.jokers.remove(j)
+            return [_E(message="苏打水喝完了！")]
+        j.stat["uses"] = left
     return []
 
 
@@ -429,16 +494,18 @@ def fx_j_card_sharp(game, j, ctx):
 
 
 def fx_j_photograph(game, j, ctx):
-    if ctx.phase == "individual" and ctx.other_card and not ctx.hand_being_evaluated:
-        if ctx.scoring_cards and ctx.other_card is ctx.scoring_cards[0]:
-            if is_face_card(ctx.other_card, game):
-                return [_E(x_mult=2)]
+    """照片：计分手牌里**第一张人头牌** ×2（不要求它同时是第一张计分牌）。"""
+    if ctx.phase != "individual" or ctx.hand_being_evaluated or ctx.other_card is None:
+        return []
+    first_face = next((c for c in ctx.scoring_cards if is_face_card(c, game)), None)
+    if first_face is not None and ctx.other_card is first_face:
+        return [_E(x_mult=2)]
     return []
 
 
 def fx_j_triboulet(game, j, ctx):
     if ctx.phase == "individual" and ctx.other_card and not ctx.hand_being_evaluated:
-        if ctx.other_card.rank in ("K", "Q"):
+        if ctx.other_card.get_id() in (13, 12):
             return [_E(x_mult=2)]
     return []
 
@@ -481,73 +548,95 @@ def fx_j_idol(game, j, ctx):
 
 
 def fx_j_seeing_double(game, j, ctx):
-    if ctx.phase == "joker_main":
-        smeared = game.any_joker("j_smeared")
-        has_club = any(c.is_suit("C", smeared=smeared) for c in ctx.scoring_cards)
-        has_other = any(not c.is_suit("C", smeared=smeared) for c in ctx.scoring_cards)
-        if has_club and has_other:
-            return [_E(x_mult=2)]
+    """重影：逐花色精确计数（card.lua 3840-3872）。
+
+    非百搭牌按 ``is_suit(suit)`` 计（受 debuff 影响），百搭牌只补「还没计到的
+    花色」，顺序为 ♣ → ♦ → ♠ → ♥；条件是有梅花且还有其他任一花色。
+    """
+    if ctx.phase != "joker_main":
+        return []
+    smeared = game.any_joker("j_smeared")
+    suits = {"H": 0, "D": 0, "S": 0, "C": 0}
+    for c in ctx.scoring_cards:
+        if c.enhanced == "wild":
+            continue
+        for s in ("H", "D", "S", "C"):
+            if c.is_suit(s, smeared=smeared):
+                suits[s] += 1
+    for c in ctx.scoring_cards:
+        if c.enhanced != "wild":
+            continue
+        for s in ("C", "D", "S", "H"):
+            if c.is_suit(s, smeared=smeared) and suits[s] == 0:
+                suits[s] += 1
+                break
+    if suits["C"] > 0 and (suits["H"] > 0 or suits["D"] > 0 or suits["S"] > 0):
+        return [_E(x_mult=2)]
     return []
 
 
 def fx_j_flower_pot(game, j, ctx):
-    if ctx.phase == "joker_main":
-        # 对应 Lua card.lua Flower Pot：逐张计数，elseif 保证每张牌只补一个花色；
-        # 模糊小丑下黑牌可能同时满足 S/C，红牌同时满足 H/D。
-        smeared = game.any_joker("j_smeared")
-        suits = {"H": 0, "D": 0, "S": 0, "C": 0}
-        for c in ctx.scoring_cards:
-            if c.enhanced != "wild":
-                for s in ("H", "D", "S", "C"):
-                    if c.is_suit(s, smeared=smeared) and suits[s] == 0:
-                        suits[s] += 1
-                        break
-        for c in ctx.scoring_cards:
-            if c.enhanced == "wild":
-                for s in ("H", "D", "S", "C"):
-                    if c.is_suit(s, smeared=smeared) and suits[s] == 0:
-                        suits[s] += 1
-                        break
-        if all(suits.values()):
-            return [_E(x_mult=3)]
+    """花盆：四种花色齐全时 ×3；非百搭牌用 ``bypass_debuff`` 计花色（card.lua 3807-3838）。"""
+    if ctx.phase != "joker_main":
+        return []
+    smeared = game.any_joker("j_smeared")
+    suits = {"H": 0, "D": 0, "S": 0, "C": 0}
+    for c in ctx.scoring_cards:
+        if c.enhanced == "wild":
+            continue
+        for s in ("H", "D", "S", "C"):
+            if c.is_suit(s, bypass_debuff=True, smeared=smeared) and suits[s] == 0:
+                suits[s] += 1
+                break
+    for c in ctx.scoring_cards:
+        if c.enhanced != "wild":
+            continue
+        for s in ("H", "D", "S", "C"):
+            if c.is_suit(s, smeared=smeared) and suits[s] == 0:
+                suits[s] += 1
+                break
+    if all(suits.values()):
+        return [_E(x_mult=3)]
     return []
 
 
 def fx_j_blackboard(game, j, ctx):
+    """黑板：手持全是黑桃/梅花时 ×3；原版用 ``is_suit(suit, nil, true)``（flush_calc）。"""
     if ctx.phase == "joker_main":
         smeared = game.any_joker("j_smeared")
-        if all(c.is_suit("S", smeared=smeared) or c.is_suit("C", smeared=smeared) for c in game.hand):
+        if all(c.is_suit("S", flush_calc=True, smeared=smeared)
+               or c.is_suit("C", flush_calc=True, smeared=smeared)
+               for c in game.hand):
             return [_E(x_mult=3)]
     return []
 
 
 def fx_j_baron(game, j, ctx):
     if ctx.phase == "individual" and ctx.hand_being_evaluated and ctx.other_card:
-        if ctx.other_card.rank == "K" and not ctx.other_card.debuffed:
+        if ctx.other_card.get_id() == 13 and not ctx.other_card.debuffed:
             return [_E(x_mult=1.5)]
     return []
 
 
 def fx_j_steel_joker(game, j, ctx):
     if ctx.phase == "joker_main":
-        n = sum(1 for c in game.deck.cards if c.enhanced == "steel")
-        n += sum(1 for c in game.hand if c.enhanced == "steel")
+        n = sum(1 for c in game.all_playing_cards() if c.enhanced == "steel")
         return [_E(x_mult=max(1.0, 1.0 + 0.2 * n))]
     return []
 
 
 def fx_j_drivers_license(game, j, ctx):
     if ctx.phase == "joker_main":
-        n = sum(1 for c in game.deck.cards if c.enhanced)
-        n += sum(1 for c in game.hand if c.enhanced)
+        n = sum(1 for c in game.all_playing_cards() if c.enhanced)
         if n >= 16:
             return [_E(x_mult=3)]
     return []
 
 
 def fx_j_erosion(game, j, ctx):
+    """侵蚀：起始牌组张数 − 当前全牌组张数（含手牌/出牌区/弃牌堆）。"""
     if ctx.phase == "joker_main":
-        below = 52 - len(game.deck.cards)
+        below = game.starting_deck_size - len(game.all_playing_cards())
         if below > 0:
             return [_E(mult=4 * below)]
     return []
@@ -560,12 +649,15 @@ def fx_j_throwback(game, j, ctx):
 
 
 def fx_j_ride_the_bus(game, j, ctx):
-    if ctx.phase == "after":
+    if ctx.blueprint:
+        return []
+    """搭乘巴士：计分**前**结算——本手有计分人头牌则清零，否则 +1；当前手立刻享受新值。"""
+    if ctx.phase == "before":
         if any(is_face_card(c, game) for c in ctx.scoring_cards):
             j.stat["mult"] = 0
         else:
             j.stat["mult"] = j.stat.get("mult", 0) + 1
-    if ctx.phase == "joker_main":
+    elif ctx.phase == "joker_main":
         return [_E(mult=j.stat.get("mult", 0))]
     return []
 
@@ -594,20 +686,27 @@ def fx_j_vampire(game, j, ctx):
 
 
 def fx_j_obelisk(game, j, ctx):
-    if ctx.phase == "after":
-        most = max(game.hands_count, key=lambda k: game.hands_count[k]) if game.hands_count else None
-        if most != ctx.scoring_name:
-            j.stat["x_mult"] = j.stat.get("x_mult", 1.0) + 0.2
-        else:
+    if ctx.blueprint:
+        return []
+    """方尖石塔：只有本手牌型**严格多于**其他所有可见牌型时才重置（card.lua 3543-3561）。"""
+    if ctx.phase == "before":
+        mine = game.hands_count.get(ctx.scoring_name, 0)
+        others = [h for h in game.visible_hands() if h != ctx.scoring_name]
+        reset = all(game.hands_count.get(h, 0) < mine for h in others)
+        if reset:
             j.stat["x_mult"] = 1.0
-    if ctx.phase == "joker_main":
+        else:
+            j.stat["x_mult"] = j.stat.get("x_mult", 1.0) + 0.2
+    elif ctx.phase == "joker_main":
         return [_E(x_mult=j.stat.get("x_mult", 1.0))]
     return []
 
 
 def fx_j_wee(game, j, ctx):
+    if ctx.blueprint:
+        return []
     if ctx.phase == "individual" and ctx.other_card and not ctx.hand_being_evaluated:
-        if ctx.other_card.rank == "2":
+        if ctx.other_card.get_id() == 2:
             j.stat["chips"] = j.stat.get("chips", 0) + 8
     if ctx.phase == "joker_main":
         return [_E(chips=j.stat.get("chips", 0))]
@@ -647,13 +746,46 @@ def fx_j_bootstraps(game, j, ctx):
 
 
 def fx_j_loyalty_card(game, j, ctx):
-    if ctx.phase == "joker_main":
-        if game.hands_played_total % 5 == 0 and game.hands_played_total > 0:
+    """积分卡：从**获得这张小丑起**每 5 手触发一次 ×4（card.lua 3632-3651）。
+
+    原版用 ``hands_played_at_create`` 记录获得时的手数，剩余 = (4 - delta) mod 6，
+    因此 delta ≡ 5 (mod 6) 时触发，即获得后的第 5、11、17… 手。
+    """
+    if ctx.phase == "before":
+        j.stat["hands"] = j.stat.get("hands", 0) + 1
+    elif ctx.phase == "joker_main":
+        if j.stat.get("hands", 0) % 6 == 5:
             return [_E(x_mult=4)]
     return []
 
 
 def fx_j_mr_bones(game, j, ctx):
+    return []
+
+
+def fx_j_hallucination(game, j, ctx):
+    # 开包时触发（packs.py 的 open_booster），记分阶段无效果
+    return []
+
+
+def fx_j_chaos(game, j, ctx):
+    # 商店免费重掷在 shop.py 的 free_rerolls 里实时推导
+    return []
+
+
+def fx_j_matador(game, j, ctx):
+    """斗牛士：头目能力触发（使这手不计分）时 +$8（card.lua 2735-2747）。"""
+    if ctx.phase == "debuffed_hand":
+        return [_E(dollars=8, message="斗牛士：+$8")]
+    return []
+
+
+def fx_j_campfire(game, j, ctx):
+    if ctx.blueprint:
+        return []
+    """篝火：每卖出一张牌 +×0.25（selling_card），击败头目后重置为 ×1。"""
+    if ctx.phase == "joker_main":
+        return [_E(x_mult=j.stat.get("x_mult", 1.0))]
     return []
 
 
@@ -715,7 +847,10 @@ def fx_j_business(game, j, ctx):
 
 
 def fx_j_space(game, j, ctx):
-    if ctx.phase == "after":
+    if ctx.blueprint:
+        return []
+    """太空小丑：在 **before** 阶段升级本手牌型，当前手立即受益（card.lua 3420-3426）。"""
+    if ctx.phase == "before":
         if roll_prob(game, 4, "space"):
             game.hand_levels[ctx.scoring_name] += 1
             return [_E(message=f"太空小丑：{HAND_CN.get(ctx.scoring_name, ctx.scoring_name)} 等级+1")]
@@ -724,11 +859,9 @@ def fx_j_space(game, j, ctx):
 
 def fx_j_sixth_sense(game, j, ctx):
     if ctx.phase == "joker_main" and game.hands_played_round == 1:
-        if len(ctx.played_cards) == 1 and ctx.played_cards[0].rank == "6":
+        if len(ctx.played_cards) == 1 and ctx.played_cards[0].get_id() == 6:
             card = ctx.played_cards[0]
             game.notify_destroyed(card)
-            if card in game.deck.cards:
-                game.deck.cards.remove(card)
             game.gain_random_consumable_of("spectral")
             return [_E(message="第六感：销毁 6 并生成幻灵牌")]
     return []
@@ -756,7 +889,7 @@ def fx_j_seance(game, j, ctx):
 
 def fx_j_8_ball(game, j, ctx):
     if ctx.phase == "individual" and ctx.other_card and not ctx.hand_being_evaluated:
-        if ctx.other_card.rank == "8" and roll_prob(game, 4, "8ball"):
+        if ctx.other_card.get_id() == 8 and roll_prob(game, 4, "8ball"):
             game.gain_random_consumable_of("tarot")
             return [_E(message="八号球：生成塔罗牌")]
     return []
@@ -770,6 +903,8 @@ def fx_j_vagabond(game, j, ctx):
 
 
 def fx_j_hiker(game, j, ctx):
+    if ctx.blueprint:
+        return []
     if ctx.phase == "individual" and ctx.other_card and not ctx.hand_being_evaluated:
         game.card_chip_extra[id(ctx.other_card)] = game.card_chip_extra.get(id(ctx.other_card), 0) + 5
     return []
@@ -820,6 +955,7 @@ JOKER_FX = {
     "j_raised_fist": fx_j_raised_fist, "j_scary_face": fx_j_scary_face,
     "j_abstract": fx_j_abstract, "j_even_steven": fx_j_even_steven,
     "j_odd_todd": fx_j_odd_todd, "j_scholar": fx_j_scholar,
+    "j_reserved_parking": fx_j_reserved_parking,
     "j_fibonacci": fx_j_fibonacci, "j_supernova": fx_j_supernova,
     "j_runner": fx_j_runner, "j_ice_cream": fx_j_ice_cream,
     "j_blue_joker": fx_j_blue_joker, "j_green_joker": fx_j_green_joker,
@@ -860,5 +996,7 @@ JOKER_FX = {
     "j_duo": fx_j_duo, "j_trio": fx_j_trio, "j_family": fx_j_family,
     "j_order": fx_j_order, "j_tribe": fx_j_tribe,
     "j_dna": fx_j_dna,
+    "j_hallucination": fx_j_hallucination, "j_chaos": fx_j_chaos,
+    "j_matador": fx_j_matador, "j_campfire": fx_j_campfire,
     "j_blueprint": fx_j_blueprint, "j_brainstorm": fx_j_brainstorm,
 }

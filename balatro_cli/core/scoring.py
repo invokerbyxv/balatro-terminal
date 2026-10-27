@@ -5,6 +5,7 @@
   → 阶段C(joker 主效果/消耗品) → 牌背 final → 玻璃破碎 → floor(chips*mult)
 """
 from __future__ import annotations
+import math
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
@@ -179,12 +180,24 @@ def evaluate_play(game) -> List[str]:
 
     # 无论是否计分都要记录：Lua 在记分块之前就自增 played 并写入 played_this_ante
     game.last_hand_name = name
+    game.last_hand_played = name
     game.round_hand_played.append(name)
     game.hands_count[name] = game.hands_count.get(name, 0) + 1
     game.played_this_ante.extend(played)
 
     if block:
         msgs.append(f"{block}，本手不计分")
+        # 斗牛士：头目能力触发使这手不计分时 +$8（card.lua 2735，context.debuffed_hand）
+        ctx = Ctx(phase="debuffed_hand", scoring_name=name, scoring_cards=scoring_hand,
+                  played_cards=played, game=game)
+        for j in list(game.jokers):
+            if j.debuffed or j.disabled_round:
+                continue
+            for ef in calculate_joker(game, j, ctx):
+                if ef.dollars:
+                    game.dollars += ef.dollars
+                if ef.message:
+                    msgs.append(ef.message)
         return msgs
 
     # Step 2: 额外记分牌（石头牌总是记分；Splash 所有牌都记分）
@@ -213,12 +226,24 @@ def evaluate_play(game) -> List[str]:
     bd = Breakdown()  # 记分分项（公式展示用）
     mult, hand_chips = hand_level_stats(name, game.hand_levels[name])
     if not boss_disabled and game.blind_key == "bl_flint":
-        mult = max(1, int(mult / 2))
-        hand_chips = max(0, int(hand_chips / 2))
+        # 燧石：基础筹码/倍率 floor(x*0.5+0.5) 四舍五入（blind.lua 512-515）
+        mult = max(1, math.floor(mult * 0.5 + 0.5))
+        hand_chips = max(0, math.floor(hand_chips * 0.5 + 0.5))
     bd.base_chips, bd.base_mult = hand_chips, mult
+
+    # 牛：打出「上一轮结算时最常打的牌型」时金钱归零。原版在计分**前**
+    # 的 Blind:debuff_hand 里判定（blind.lua 560-569），这里同样提前处理。
+    if not boss_disabled and game.blind_key == "bl_ox":
+        if name == game.most_played_snapshot and game.dollars > 0:
+            game.dollars = 0
+            msgs.append("牛：金钱归零！")
 
     # (d) 阶段 A：记分牌逐张
     for card in scoring_hand:
+        # 被头目禁用的牌不产生任何效果（原版 eval_card 直接返回空表），
+        # 因此不记分、不触发红封重复，也不触发逐张小丑
+        if card.debuffed:
+            continue
         reps = 1
         if card.seal == "red":
             reps += 1
@@ -263,6 +288,9 @@ def evaluate_play(game) -> List[str]:
 
     # (e) 阶段 B：手中牌
     for card in game.hand:
+        # 同一规则：被禁用的手持牌不提供钢铁/重复/逐张小丑效果
+        if card.debuffed:
+            continue
         reps = 1
         if card.seal == "red":
             reps += 1
@@ -332,16 +360,12 @@ def evaluate_play(game) -> List[str]:
     elif game.deck_key == "b_anaglyph":
         pass
 
-    # (h) 玻璃破碎
+    # (h) 玻璃破碎：真销毁（不再回牌组），并给玻璃小丑 / 卡尼奥计数
     from .effects import roll_prob
-    broken = []
     for card in scoring_hand:
         if card.enhanced == "glass" and not card.debuffed:
             if roll_prob(game, booster_data.ENHANCED["m_glass"]["break_chance"], "glass"):
-                broken.append(card)
-                game.glass_broken += 1
-                if card.is_face():
-                    game.face_destroyed += 1
+                game.notify_destroyed(card, shattered=True)
                 msgs.append(f"玻璃牌碎裂：{card.display()}")
 
     # Step 5: 最终分
@@ -355,16 +379,7 @@ def evaluate_play(game) -> List[str]:
         game.dollars = max(0, game.dollars - cost)
         msgs.append(f"牙：打出 {cost} 张牌，-${cost}")
 
-    # 牛 boss：打出最常玩牌型清零金钱
-    if not boss_disabled and game.blind_key == "bl_ox":
-        most = max(game.hand_levels, key=lambda k: game.hands_count.get(k, 0))
-        if name == most and game.dollars > 0:
-            game.dollars = 0
-            msgs.append("牛：金钱归零！")
-
-    # 玻璃破碎牌从场中移除
-    for card in broken:
-        pass  # 已打出，无需从手牌移除
+    # 玻璃碎裂的牌已由 notify_destroyed 从出牌区移出，这里无需再处理
 
     # Step 6: joker after 阶段
     ctx = Ctx(phase="after", scoring_name=name, scoring_cards=scoring_hand,
