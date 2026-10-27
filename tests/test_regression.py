@@ -248,10 +248,16 @@ class TestBlockedPlay(unittest.TestCase):
         self.assertIsNone(blocked_play_reason(g, cards("A-S", "K-H")))
 
     def test_chicot_disables_all(self):
-        g = new_game(seed=1)
-        g.blind_key = "bl_psychic"
+        # 希科在选盲注时禁用头目效果；之后卖掉也不会中途恢复
+        g = new_game(seed=1, blind=False)
+        g.ante, g.boss_key = 2, "bl_psychic"
+        g.blind_on_deck = "Boss"
         g.jokers.append(JokerItem(key="j_chicot"))
+        g.select_blind()
+        self.assertTrue(g.boss_disabled())
         self.assertIsNone(blocked_play_reason(g, cards("A-S", "A-H")))
+        g.jokers.remove(g.jokers[0])
+        self.assertTrue(g.boss_disabled())
 
 
 class TestShopAndPacks(unittest.TestCase):
@@ -264,35 +270,47 @@ class TestShopAndPacks(unittest.TestCase):
     def test_shop_card_slot_generates_and_buys(self):
         # 回归：_make_card_for_shop 曾漏导入 RANKS/SUITS/ENHANCED，
         # 商店随机到「增强卡牌」格子时（打出制胜一手后进商店）整局崩溃。
+        # 原版默认不出售扑克牌，只有「魔术戏法」把 playing_card_rate 提到 4。
         g = new_game(seed=3, blind=False)
+        self.assertEqual(g.playing_card_rate, 0)
+        g.playing_card_rate = 4
         g.enter_shop()
         card = g._make_card_for_shop()
         self.assertIsInstance(card, Card)
         self.assertIn(card.rank, RANKS)
         self.assertIn(card.suit, SUITS)
-        self.assertIn(card.enhanced, ENHANCED)
         self.assertGreaterEqual(g.shop_item_price(card), 1)
         g.shop_jokers = [card]
         g.dollars = 100
         self.assertTrue(g.buy_shop_item(0))
 
-    def test_enter_shop_applies_tags(self):
-        # 回归：ConsumableMixin._apply_tag 曾漏导入 effects.apply_tag，
-        # 带着标签进商店（跳过盲注后必然发生）时 NameError 崩整局。
-        # 注意 test_all_tags_apply 直接调 effects.apply_tag，绕过了 mixin，抓不到这类漏导入。
+    def test_playing_card_shop_price_ignores_enhancement(self):
+        """扑克牌 $1 起，只有版本加价；增强/蜡封不加价（card.lua 369-385）。"""
         g = new_game(seed=3, blind=False)
-        g.dollars = 10
-        g.tags = [Tag(key="tag_economy")]
-        g.enter_shop()                          # 不应抛异常
-        self.assertEqual(g.dollars, 20)         # 经济标签：$10 -> +$10
+        plain = Card(rank="A", suit="S")
+        enhanced = Card(rank="A", suit="S", enhanced="bonus", seal="gold")
+        self.assertEqual(g.shop_item_price(plain), 1)
+        self.assertEqual(g.shop_item_price(enhanced), 1)
+        # set_cost: floor((1 + 3 + 0.5) * 100 / 100) = 4
+        holo = Card(rank="A", suit="S", edition="holo")
+        self.assertEqual(g.shop_item_price(holo), 4)
 
-    def test_shop_close_keeps_only_persistent_tags(self):
-        # 回归：shop_closed 曾漏导入 PERSISTENT_TAGS。
+    def test_immediate_tags_apply_on_skip(self):
+        """跳过盲注即结算 immediate 标签——不再等到进商店（button_callbacks 2772）。"""
+        g = new_game(seed=3)
+        g.dollars = 10
+        g.blind_tags = {"Small": "tag_economy", "Big": None}
+        self.assertFalse(g.skip_blind())
+        self.assertEqual(g.dollars, 20)           # 经济标签：$10 -> +$10
+        self.assertEqual(g.tags, [])              # 已触发并移出收藏
+
+    def test_shop_closed_keeps_untriggered_tags(self):
+        # 标签只在对应阶段触发；离开商店不应丢掉还没到阶段的标签
         g = new_game(seed=3, blind=False)
         g.enter_shop()
         g.tags = [Tag("tag_double"), Tag("tag_handy")]
         g.shop_closed()
-        self.assertEqual([t.key for t in g.tags], ["tag_double"])
+        self.assertEqual(sorted(t.key for t in g.tags), ["tag_double", "tag_handy"])
 
     def test_reroll_cost_increases(self):
         g = new_game(seed=3, blind=False)
@@ -416,10 +434,13 @@ class TestPackContents(unittest.TestCase):
 
 
 class TestBossDetails(unittest.TestCase):
-    def serpent_game(self, seed=1):
+    def serpent_game(self, seed=1, chicot=False):
         g = new_game(seed=seed, blind=False)
         g.ante, g.boss_key = 2, "bl_serpent"
         g.blind_on_deck = "Boss"
+        if chicot:
+            # 希科在**选盲注时**生效（card.lua 2491-2502），因此必须先进栏再选
+            g.jokers.append(JokerItem(key="j_chicot"))
         g.select_blind()
         self.assertEqual(g.blind_key, "bl_serpent")
         return g
@@ -443,8 +464,8 @@ class TestBossDetails(unittest.TestCase):
         self.assertEqual(len(g.hand), 8)
 
     def test_serpent_disabled_by_chicot(self):
-        g = self.serpent_game()
-        g.jokers.append(JokerItem(key="j_chicot"))
+        g = self.serpent_game(chicot=True)
+        self.assertTrue(g.boss_disabled())
         select_cards(g, 5)
         g.play_selected()
         self.assertEqual(len(g.hand), 8)
@@ -538,12 +559,19 @@ class TestHookCoverage(unittest.TestCase):
                 self.fail(f"blueprint->{joker_key} on_sell_joker: {exc}")
 
     def test_all_tags_apply(self):
+        """每个标签在自己的触发阶段都能被结算且不抛异常。"""
         from balatro_cli.data.tags import TAGS
-        from balatro_cli.core.effects import apply_tag
+        from balatro_cli.core.effects import TAG_TYPE, apply_tag
         for key in TAGS:
             g = new_game(seed=5)
             g.dollars = 20
-            apply_tag(g, Tag(key=key))
+            context = TAG_TYPE.get(key)
+            if context is None:          # tag_double 由 add_tag 直接复制，无需阶段
+                continue
+            if context == "new_blind_choice":
+                # 开包类标签会打开卡包，先把消耗品/小丑栏位腾出来
+                g.consumeables.clear()
+            apply_tag(g, Tag(key=key), context)
 
 
 class TestInvisibleJoker(unittest.TestCase):

@@ -53,7 +53,9 @@ class TestScreensRender(unittest.TestCase):
     def test_main_screens(self):
         app = make_app()
         self.assert_renders(app._menu)
+        app.pending_deck = "b_red"
         self.assert_renders(app._deck_select)
+        self.assert_renders(app._stake_select)
         self.assert_renders(app._blind_select)
         self.assert_renders(app._play)
         self.assert_renders(app._info)
@@ -79,13 +81,30 @@ class TestScreensRender(unittest.TestCase):
         app.game.buy_booster(0)
         self.assert_renders(app._pack)
 
-    def test_tag_pack_opens_on_shop_entry(self):
-        # 跳过盲注拿到的「小丑」标签会在进商店时开一个免费卡包，界面应直接进入卡包
+    def test_tag_pack_opens_on_skip(self):
+        # 跳过盲注拿到的「小丑」标签在跳过的当下就开一个免费卡包，
+        # 界面应直接进入卡包，取完再回到盲注选择（对应 button_callbacks 2775-2777）
         app = make_app()
-        app.game.tags = [Tag(key="tag_buffoon")]
-        app._enter_shop()
+        g = app.game
+        g.blind_on_deck = "Big"
+        g.blind_tags = {"Small": None, "Big": "tag_buffoon"}
+        app.state = "blind"
+        with contextlib.redirect_stdout(io.StringIO()), \
+                patch("builtins.input", lambda *a, **k: ""), \
+                patch("balatro_cli.cli.ui.prompt", lambda *a, **k: "2"):
+            app._blind_select()
         self.assertEqual(app.state, "pack")
-        self.assertEqual(app.game.pending_pack["key"], "p_buffoon_mega")
+        self.assertEqual(g.pending_pack["key"], "p_buffoon_mega")
+        self.assertEqual(app.pack_return, "blind")
+
+    def test_shop_renders_two_vouchers(self):
+        # 优惠券标签会让商店里出现 2 张优惠券，渲染不能崩
+        app = make_app()
+        app.game.enter_shop()
+        app.game.shop_offer_vouchers = ["v_grabber", "v_wasteful"]
+        out = self.assert_renders(app._shop, ("x",))
+        self.assertIn("v1", plain(out))
+        self.assertIn("v2", plain(out))
 
     def test_pack_screen_sells_before_picking(self):
         app = make_app()
