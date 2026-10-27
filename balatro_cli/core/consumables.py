@@ -48,14 +48,13 @@ class ConsumableMixin:
         if len(self.consumeables) >= self.consumable_slots:
             self.say("消耗品栏位已满")
             return
-        cfg = consumable_data.ALL_CONSUMABLES[key]
-        self.consumeables.append(ConsumableItem(key=key, buy_cost=cfg["cost"],
-                                                sell_price=max(1, cfg["cost"] // 2)))
+        self.consumeables.append(ConsumableItem(key=key))
 
     def _gain_random_tarot(self):
         key = self.rng.choice(list(consumable_data.TAROTS))
         self.gain_consumable(key)
         self.say(f"紫色蜡封生成塔罗牌：{consumable_data.get_consumable_cn(key)}")
 
-    def _apply_tag(self, tag: Tag):
-        apply_tag(self, tag)
+    def _apply_tag(self, tag: Tag, context: str) -> bool:
+        """按阶段结算一个标签（真正的分发在 effects.apply_tag）。"""
+        return apply_tag(self, tag, context)
