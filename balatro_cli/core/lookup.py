@@ -17,11 +17,15 @@ def joker_cn(key: str) -> str:
     return key
 
 
-def roll_prob(game, denom: int, label: str = "") -> bool:
-    """1/denom 概率；持有六六大顺时概率翻倍（对应 G.GAME.probabilities）。"""
-    if game.any_joker("j_oops"):
-        denom = max(1, denom // 2)
-    return game.rng.chance(denom, label)
+def roll_prob(game, denom: float, label: str = "") -> bool:
+    """1/denom 概率；持有六六大顺时概率翻倍（对应 G.GAME.probabilities）。
+
+    原版判定是 ``pseudorandom < G.GAME.probabilities.normal / odds``，
+    六六大顺把 ``normal`` 从 1 提到 2，因此 1/5 → 2/5、1/7 → 2/7。
+    注意不能写成 ``denom // 2``：奇数分母下那会把 1/7 变成 1/3。
+    """
+    normal = 2.0 if game.any_joker("j_oops") else 1.0
+    return game.rng.roll(label) < normal / denom
 
 
 def guaranteed_edition(game, label: str = "edition") -> str:

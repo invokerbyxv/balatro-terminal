@@ -59,6 +59,10 @@ class Card:
     debuffed: bool = False
     #: 背面朝下（对应 card.lua 的 facing == 'back'）：牌面信息对外隐藏，显示为 ?
     face_down: bool = False
+    #: 是否被选中（原版 G.hand.highlighted）
+    selected: bool = field(default=False, compare=False)
+    #: 青钟头目：被强制选中，无法取消（对应 ability.forced_selection）
+    forced_selection: bool = field(default=False, compare=False)
     uid: int = field(default=0, compare=False)
 
     def __eq__(self, other):
@@ -69,17 +73,38 @@ class Card:
 
     # ---------- 基础查询 ----------
     def get_id(self) -> int:
+        """点数 id（对应 card.lua 的 ``Card:get_id()``）。
+
+        石头牌返回**负数**：原版 ``return -math.random(100, 1000000)``，于是石头牌
+        天然被排除在 ``get_X_same``（只认 1..14 的分组）与 ``get_straight``
+        （要求 ``1 < id < 15``）之外，也不会被 ``is_face`` 当成人头牌。
+        这里用稳定负数（同一张牌多次调用结果一致），语义等价。
+        """
+        if self.enhanced == "stone":
+            return -1000 - (self.uid or id(self) % 1000000)
         return rank_id(self.rank)
 
     def get_nominal(self) -> float:
-        if self.enhanced == "stone":
-            return -1000
+        """比大小用的 nominal（对应 card.lua 的 ``Card:get_nominal``）。
+
+        石头牌把花色分量的系数取成 -1000（``base.nominal - suit_nominal*1000``），
+        因此永远排在任何普通牌之后，选高牌时不会被选中。
+        """
+        mult = -1000.0 if self.enhanced == "stone" else 1.0
         return (rank_value(self.rank) * 1.0
-                + SUIT_NOMINAL.get(self.suit, 0.0)
+                + SUIT_NOMINAL.get(self.suit, 0.0) * mult
                 + FACE_NOMINAL.get(self.rank, 0.0))
 
-    def is_face(self) -> bool:
-        return self.rank in ("J", "Q", "K")
+    def is_face(self, from_boss: bool = False) -> bool:
+        """是否人头牌（对应 card.lua 的 ``Card:is_face``）。
+
+        被头目禁用的牌不再是人头牌（``from_boss=True`` 时绕过该判定，用于
+        判断「该不该被禁用」自身）；石头牌 ``get_id()`` 为负，也不再是人头牌。
+        百搭/幻视等「视为人头牌」的效果由 :func:`joker_fx.is_face_card` 叠加。
+        """
+        if self.debuffed and not from_boss:
+            return False
+        return self.get_id() in (11, 12, 13)
 
     def is_suit(self, suit: str, bypass_debuff: bool = False, flush_calc: bool = False,
                 smeared: bool = False) -> bool:
